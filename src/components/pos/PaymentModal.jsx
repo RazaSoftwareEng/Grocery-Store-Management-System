@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
-import { Input } from '../common/Input';
+import { Input, FieldLabel, FieldMessage } from '../common/Input';
 import { formatCurrency } from '../../utils/formatters';
 import { useStore } from '../../context/StoreContext';
 import { useToast } from '../../context/ToastContext';
+import { useFormValidation } from '../../hooks/useFormValidation';
 import { api } from '../../services/api';
 import { Banknote, CreditCard, Smartphone, Clock, CheckCircle2 } from 'lucide-react';
+
+const METHODS = [
+  { id: 'CASH', label: 'Cash', icon: Banknote },
+  { id: 'CARD', label: 'Card', icon: CreditCard },
+  { id: 'ONLINE', label: 'Transfer', icon: Smartphone },
+  { id: 'CREDIT', label: 'Khata', icon: Clock },
+];
 
 export function PaymentModal({
   isOpen,
@@ -34,16 +42,39 @@ export function PaymentModal({
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const isWalkIn = !activeCustomer || activeCustomer.customerId === 'WALK-IN';
+
+  const v = useFormValidation(
+    { paymentMethod, amountPaid },
+    {
+      paymentMethod: (val) =>
+        val === 'CREDIT' && isWalkIn ? 'Khata needs a registered customer. Select one from the bill first.' : '',
+      amountPaid: (val, all) => {
+        if (all.paymentMethod !== 'CASH') return '';
+        if (String(val).trim() === '') return 'Enter the cash received';
+        const n = Number(val);
+        if (Number.isNaN(n)) return 'Numbers only';
+        if (n < cartTotal) return `Short by ${formatCurrency(cartTotal - n, currencySymbol)}`;
+        return '';
+      },
+    }
+  );
+
   // Initialize amountPaid with cartTotal whenever modal opens or total changes
   useEffect(() => {
     if (isOpen) {
       setAmountPaid(String(cartTotal));
+      v.reset();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, cartTotal]);
 
   const tendered = parseFloat(amountPaid) || 0;
   const change = Math.max(0, tendered - cartTotal);
-  const remaining = Math.max(0, cartTotal - tendered);
+
+  const creditLimit = Number(activeCustomer?.creditLimit) || 0;
+  const newBalance = (Number(activeCustomer?.outstandingBalance) || 0) + cartTotal;
+  const overLimit = paymentMethod === 'CREDIT' && !isWalkIn && creditLimit > 0 && newBalance > creditLimit;
 
   const handleQuickCash = (extra) => {
     if (extra === 'EXACT') {
@@ -52,25 +83,17 @@ export function PaymentModal({
       const current = parseFloat(amountPaid) || 0;
       setAmountPaid(String(current + extra));
     }
+    v.touch('amountPaid');
   };
 
   const handleCheckout = async (e) => {
     e.preventDefault();
 
     if (!cart.length) {
-      showToast('Cart is empty', 'warning');
+      showToast('The bill is empty. Add products first.', 'warning');
       return;
     }
-
-    if (paymentMethod === 'CASH' && tendered < cartTotal) {
-      showToast(`Tendered cash (${tendered}) is less than total (${cartTotal})`, 'warning');
-      return;
-    }
-
-    if (paymentMethod === 'CREDIT' && (!activeCustomer || activeCustomer.customerId === 'WALK-IN')) {
-      showToast('Please select a registered customer to process a Credit sale', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsSubmitting(true);
@@ -94,7 +117,7 @@ export function PaymentModal({
       const res = await api.createSale(salePayload);
 
       if (res?.success) {
-        showToast('Sale completed successfully!', 'success');
+        showToast(`Payment of ${formatCurrency(cartTotal, currencySymbol)} received`, 'success');
         clearCart();
         await refreshAllData();
         onClose();
@@ -103,184 +126,166 @@ export function PaymentModal({
         showToast(res?.error || 'Failed to process sale', 'error');
       }
     } catch (err) {
-      showToast(err.message || 'Error processing transaction', 'error');
+      showToast(err.message || 'Could not complete the sale. Try again.', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const methodError = v.errorFor('paymentMethod');
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Complete Transaction"
-      subtitle={`Customer: ${activeCustomer?.name || 'Walk-in'} • Cashier: ${cashier.name}`}
+      title="Take payment"
+      subtitle={`${activeCustomer?.name || 'Walk-in customer'} · Cashier: ${cashier.name}`}
       maxWidth="max-w-lg"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button type="submit" form="payment-form" variant="primary" size="lg" isLoading={isSubmitting} icon={CheckCircle2}>
+            Charge {formatCurrency(cartTotal, currencySymbol)}
+          </Button>
+        </>
+      }
     >
-      <form onSubmit={handleCheckout} className="space-y-5">
-        {/* Total Summary Header */}
-        <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex items-center justify-between">
+      <form id="payment-form" ref={v.formRef} onSubmit={handleCheckout} noValidate className="space-y-5">
+        {/* Amount due */}
+        <div className="flex items-end justify-between gap-4 pb-4 border-b border-slate-200">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-              Amount Due
-            </p>
-            <p className="text-2xl font-black text-emerald-950 mt-0.5">
+            <p className="text-[13px] text-slate-500">Amount due</p>
+            <p className="text-3xl font-semibold text-slate-900 tabular tracking-tight mt-0.5">
               {formatCurrency(cartTotal, currencySymbol)}
             </p>
           </div>
-          <div className="text-right text-xs text-slate-500">
-            <p>Subtotal: {formatCurrency(cartSubtotal, currencySymbol)}</p>
-            {cartDiscount > 0 && (
-              <p className="text-rose-600 font-medium">
-                Discount: -{formatCurrency(cartDiscount, currencySymbol)}
-              </p>
-            )}
-            {cartTax > 0 && <p>Tax: {formatCurrency(cartTax, currencySymbol)}</p>}
+          <div className="text-right text-xs text-slate-500 space-y-0.5 tabular">
+            <p>Subtotal {formatCurrency(cartSubtotal, currencySymbol)}</p>
+            {cartDiscount > 0 && <p className="text-rose-600">Discount −{formatCurrency(cartDiscount, currencySymbol)}</p>}
+            {cartTax > 0 && <p>Tax {formatCurrency(cartTax, currencySymbol)}</p>}
           </div>
         </div>
 
-        {/* Payment Method Selector */}
-        <div>
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 block mb-2">
-            Select Payment Method
-          </label>
-          <div className="grid grid-cols-4 gap-2">
-            {[
-              { id: 'CASH', label: 'Cash', icon: Banknote },
-              { id: 'CARD', label: 'Card', icon: CreditCard },
-              { id: 'ONLINE', label: 'Transfer', icon: Smartphone },
-              { id: 'CREDIT', label: 'Store Credit', icon: Clock },
-            ].map((m) => {
+        {/* Method */}
+        <div className="flex flex-col gap-1.5" data-field="paymentMethod">
+          <FieldLabel label="Payment method" />
+          <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Payment method">
+            {METHODS.map((m) => {
               const Icon = m.icon;
               const isSelected = paymentMethod === m.id;
               return (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => setPaymentMethod(m.id)}
-                  className={`p-2.5 rounded-xl border flex flex-col items-center justify-center gap-1.5 transition-all text-xs font-bold ${
+                  name={m.id === 'CREDIT' ? 'paymentMethod' : undefined}
+                  role="radio"
+                  aria-checked={isSelected}
+                  onClick={() => {
+                    setPaymentMethod(m.id);
+                    v.touch('paymentMethod');
+                  }}
+                  className={`h-16 rounded-xl border flex flex-col items-center justify-center gap-1.5 text-[13px] font-medium transition-all duration-150 ${
                     isSelected
-                      ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                      ? methodError && m.id === 'CREDIT'
+                        ? 'border-rose-500 bg-rose-50 text-rose-700 ring-[3px] ring-rose-600/15'
+                        : 'border-brand-600 bg-brand-50 text-brand-700 ring-[3px] ring-brand-600/15'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
-                  <span>{m.label}</span>
+                  <Icon className="w-[18px] h-[18px]" strokeWidth={1.8} />
+                  {m.label}
                 </button>
               );
             })}
           </div>
+          <FieldMessage error={methodError} />
         </div>
 
-        {/* Cash Tendered & Quick Buttons */}
         {paymentMethod === 'CASH' && (
-          <div className="space-y-3 p-4 bg-slate-50 rounded-2xl border border-slate-200/80">
+          <div className="space-y-3 animate-in fade-in slide-in-from-top-1">
             <Input
-              label="Cash Received (Tendered) *"
+              label="Cash received *"
               type="number"
+              inputMode="decimal"
               step="any"
               value={amountPaid}
               onChange={(e) => setAmountPaid(e.target.value)}
               placeholder="0.00"
-              required
+              suffix={currencySymbol}
+              className="text-base font-semibold tabular h-11"
               autoFocus
+              {...v.field('amountPaid')}
+              isValid={false}
             />
 
-            {/* Quick Denominations in PKR */}
-            <div>
-              <p className="text-[11px] font-semibold text-slate-500 mb-1.5">
-                Quick Cash Add (PKR)
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleQuickCash('EXACT')}
-                >
-                  Exact
+            <div className="flex flex-wrap gap-1.5">
+              <Button variant="secondary" size="sm" onClick={() => handleQuickCash('EXACT')}>
+                Exact
+              </Button>
+              {[100, 500, 1000, 5000].map((n) => (
+                <Button key={n} variant="secondary" size="sm" onClick={() => handleQuickCash(n)} className="tabular">
+                  +{n.toLocaleString()}
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => handleQuickCash(100)}>
-                  +100
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => handleQuickCash(500)}>
-                  +500
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => handleQuickCash(1000)}>
-                  +1,000
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => handleQuickCash(5000)}>
-                  +5,000
-                </Button>
-              </div>
+              ))}
             </div>
 
-            {/* Change calculation */}
-            <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-sm">
-              <span className="font-semibold text-slate-600">Change to Return:</span>
+            <div
+              className={`flex items-center justify-between px-4 py-3 rounded-xl border transition-colors duration-200 ${
+                tendered >= cartTotal ? 'bg-brand-50 border-brand-100' : 'bg-slate-50 border-slate-200'
+              }`}
+              aria-live="polite"
+            >
+              <span className="text-[13px] text-slate-600">Change to return</span>
               <span
-                className={`text-lg font-black ${
-                  tendered >= cartTotal ? 'text-emerald-700' : 'text-rose-600'
+                key={change}
+                className={`text-xl font-semibold tabular animate-bump inline-block ${
+                  tendered >= cartTotal ? 'text-brand-700' : 'text-slate-400'
                 }`}
               >
-                {tendered >= cartTotal
-                  ? formatCurrency(change, currencySymbol)
-                  : `Short by ${formatCurrency(remaining, currencySymbol)}`}
+                {formatCurrency(change, currencySymbol)}
               </span>
             </div>
           </div>
         )}
 
-        {/* Card or Online Reference */}
         {(paymentMethod === 'CARD' || paymentMethod === 'ONLINE') && (
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+          <div className="animate-in fade-in slide-in-from-top-1">
             <Input
-              label="Transaction / Terminal Reference"
+              label="Transaction reference"
               value={reference}
               onChange={(e) => setReference(e.target.value)}
-              placeholder="e.g. Card Approval # / Raast / EasyPaisa ID"
+              placeholder="Approval #, Raast or EasyPaisa ID"
+              optional
               autoFocus
             />
           </div>
         )}
 
-        {/* Customer Credit Notice */}
-        {paymentMethod === 'CREDIT' && (
-          <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-xs text-amber-900 space-y-1">
-            <p className="font-bold">Store Credit Sale (Khata)</p>
-            <p>
-              This invoice amount of <strong>{formatCurrency(cartTotal, currencySymbol)}</strong> will be added to{' '}
-              <strong>{activeCustomer?.name}</strong>'s outstanding balance.
+        {paymentMethod === 'CREDIT' && !isWalkIn && (
+          <div
+            className={`p-4 rounded-xl border text-[13px] space-y-1 animate-in fade-in slide-in-from-top-1 ${
+              overLimit ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-900'
+            }`}
+          >
+            <p className="font-semibold">Added to {activeCustomer?.name}'s khata</p>
+            <p className="tabular">
+              Balance goes from {formatCurrency(activeCustomer?.outstandingBalance || 0, currencySymbol)} to{' '}
+              <strong>{formatCurrency(newBalance, currencySymbol)}</strong>
+              {creditLimit > 0 && <> (limit {formatCurrency(creditLimit, currencySymbol)})</>}.
             </p>
-            <p className="text-[11px] text-amber-700">
-              Current balance: {formatCurrency(activeCustomer?.outstandingBalance || 0, currencySymbol)}
-            </p>
+            {overLimit && <p className="font-medium">This sale goes over the customer's credit limit.</p>}
           </div>
         )}
 
-        {/* Transaction Notes */}
         <Input
-          label="Optional Notes"
+          label="Notes"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          placeholder="e.g. Special packing, delivery instructions"
+          placeholder="e.g. Deliver to shop #12"
+          optional
         />
-
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-          <Button variant="outline" size="md" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            size="md"
-            isLoading={isSubmitting}
-            icon={CheckCircle2}
-            className="px-6 font-bold"
-          >
-            Confirm & Pay {formatCurrency(cartTotal, currencySymbol)}
-          </Button>
-        </div>
       </form>
     </Modal>
   );

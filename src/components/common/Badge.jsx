@@ -1,45 +1,36 @@
 import React from 'react';
 
-export function Badge({
-  children,
-  variant = 'neutral',
-  size = 'sm',
-  className = '',
-}) {
-  const variants = {
-    success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    warning: 'bg-amber-50 text-amber-700 border-amber-200',
-    danger: 'bg-rose-50 text-rose-700 border-rose-200',
-    info: 'bg-sky-50 text-sky-700 border-sky-200',
-    neutral: 'bg-slate-100 text-slate-700 border-slate-200',
-  };
+const variants = {
+  success: { box: 'bg-brand-50 text-brand-700 border-brand-100', dot: 'bg-brand-500' },
+  warning: { box: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
+  danger: { box: 'bg-rose-50 text-rose-700 border-rose-200', dot: 'bg-rose-500' },
+  info: { box: 'bg-info-50 text-info-700 border-info-200', dot: 'bg-info-500' },
+  neutral: { box: 'bg-slate-100 text-slate-600 border-slate-200', dot: 'bg-slate-400' },
+};
 
-  const sizes = {
-    xs: 'px-1.5 py-0.5 text-[10px]',
-    sm: 'px-2.5 py-0.5 text-xs font-semibold',
-    md: 'px-3 py-1 text-sm font-semibold',
-  };
+const sizes = {
+  xs: 'h-5 px-2 text-xs gap-1.5',
+  sm: 'h-[22px] px-2 text-xs gap-1.5',
+  md: 'h-6 px-2.5 text-[13px] gap-1.5',
+};
 
+// "PAYMENT_DUE" -> "Payment due"; mixed-case text is left alone
+function humanize(value) {
+  if (typeof value !== 'string' || value !== value.toUpperCase() || !/[A-Z]/.test(value)) return value;
+  const s = value.replace(/_/g, ' ').toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export function Badge({ children, variant = 'neutral', size = 'sm', dot = true, className = '' }) {
+  const v = variants[variant] || variants.neutral;
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border tracking-wide uppercase ${
-        variants[variant] || variants.neutral
-      } ${sizes[size] || sizes.sm} ${className}`}
+      className={`inline-flex items-center rounded-full border font-medium whitespace-nowrap ${v.box} ${
+        sizes[size] || sizes.sm
+      } ${className}`}
     >
-      <span
-        className={`w-1.5 h-1.5 rounded-full ${
-          variant === 'success'
-            ? 'bg-emerald-500'
-            : variant === 'warning'
-            ? 'bg-amber-500'
-            : variant === 'danger'
-            ? 'bg-rose-500'
-            : variant === 'info'
-            ? 'bg-sky-500'
-            : 'bg-slate-400'
-        }`}
-      />
-      {children}
+      {dot && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${v.dot}`} />}
+      {React.Children.map(children, humanize)}
     </span>
   );
 }

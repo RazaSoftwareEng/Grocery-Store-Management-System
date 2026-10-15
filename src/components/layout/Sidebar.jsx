@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { api } from '../../services/api';
-import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -14,46 +14,54 @@ import {
   Settings,
   Layers,
   ArrowLeftRight,
-  Database,
-  ChevronLeft,
-  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
   LogOut,
-  UserCheck
+  UserCheck,
+  Store,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
 
 const ALL_NAV_ITEMS = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/pos', label: 'POS Billing', icon: ShoppingCart, highlight: true },
-  { to: '/products', label: 'Products', icon: Package },
-  { to: '/categories', label: 'Categories', icon: Layers },
-  { to: '/inventory', label: 'Stock Movements', icon: ArrowLeftRight },
-  { to: '/purchases', label: 'Purchases', icon: Boxes, adminOnly: true },
-  { to: '/suppliers', label: 'Suppliers', icon: Truck, adminOnly: true },
-  { to: '/sales', label: 'Sales & Invoices', icon: Receipt },
-  { to: '/customers', label: 'Customers', icon: Users },
-  { to: '/expenses', label: 'Expenses', icon: Wallet, adminOnly: true },
-  { to: '/reports', label: 'Reports & Profit', icon: BarChart3, adminOnly: true },
-  { to: '/users', label: 'Staff & Cashiers', icon: UserCheck, adminOnly: true },
-  { to: '/settings', label: 'Settings & DB', icon: Settings, adminOnly: true },
+  { to: '/', label: 'Dashboard', icon: LayoutDashboard, adminOnly: true },
+  { to: '/counter', label: 'My counter', icon: Store, cashierOnly: true },
+  { to: '/pos', label: 'POS billing', icon: ShoppingCart },
+  { group: 'Catalog', to: '/products', label: 'Products', icon: Package, adminOnly: true, badge: 'lowStock' },
+  { group: 'Catalog', to: '/categories', label: 'Categories', icon: Layers, adminOnly: true },
+  { group: 'Catalog', to: '/inventory', label: 'Stock movements', icon: ArrowLeftRight, adminOnly: true },
+  { group: 'Buying', to: '/purchases', label: 'Purchases', icon: Boxes, adminOnly: true },
+  { group: 'Buying', to: '/suppliers', label: 'Suppliers', icon: Truck, adminOnly: true },
+  { group: 'Selling', to: '/sales', label: 'Sales & invoices', icon: Receipt, adminOnly: true },
+  { group: 'Selling', to: '/customers', label: 'Customers', icon: Users, adminOnly: true },
+  { group: 'Finance', to: '/expenses', label: 'Expenses', icon: Wallet, adminOnly: true },
+  { group: 'Finance', to: '/reports', label: 'Reports & profit', icon: BarChart3, adminOnly: true },
+  { group: 'Admin', to: '/users', label: 'Staff & cashiers', icon: UserCheck, adminOnly: true },
+  { group: 'Admin', to: '/settings', label: 'Settings', icon: Settings, adminOnly: true },
 ];
 
 export function Sidebar({ onCloseMobile }) {
-  const { settings, isLiveBackend } = useStore();
-  const { currentUser, isAdmin, logout } = useAuth();
-  const location = useLocation();
+  const { settings, isLiveBackend, products = [] } = useStore();
+  const { isAdmin, logout } = useAuth();
   const navigate = useNavigate();
 
   // Allow collapsing sidebar to save space on laptop screens
   const [isCollapsed, setIsCollapsed] = useState(() => {
-    return localStorage.getItem('gsms_sidebar_collapsed') === 'true';
+    try {
+      return localStorage.getItem('gsms_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
   });
 
   const toggleCollapse = () => {
     setIsCollapsed((prev) => {
       const next = !prev;
-      localStorage.setItem('gsms_sidebar_collapsed', String(next));
+      try {
+        localStorage.setItem('gsms_sidebar_collapsed', String(next));
+      } catch {
+        /* storage unavailable */
+      }
       return next;
     });
   };
@@ -63,125 +71,151 @@ export function Sidebar({ onCloseMobile }) {
     navigate('/login');
   };
 
+  const lowStockCount = products.filter(
+    (p) => p.status !== 'INACTIVE' && Number(p.currentStock) <= Number(p.minimumStock)
+  ).length;
+
   // Filter items based on user role
   const navItems = ALL_NAV_ITEMS.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
+    if (item.cashierOnly && isAdmin) return false;
     return true;
   });
 
+  const storeName = settings.storeName || 'Bismillah Grocery';
+  const initials = storeName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase();
+
+  let lastGroup = null;
+
   return (
     <aside
-      className={`h-full bg-slate-900 text-slate-300 flex flex-col shrink-0 select-none border-r border-slate-800 transition-all duration-200 ${
-        isCollapsed ? 'w-16' : 'w-56 xl:w-60'
+      className={`h-full bg-white text-slate-700 flex flex-col shrink-0 select-none border-r border-slate-200 transition-[width] duration-300 ease-[cubic-bezier(.22,1,.36,1)] ${
+        isCollapsed ? 'w-[64px]' : 'w-60'
       }`}
     >
-      {/* Brand Header */}
-      <div className={`p-3.5 flex items-center border-b border-slate-800/80 ${isCollapsed ? 'justify-center' : 'justify-between gap-2'}`}>
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-emerald-500/20 shrink-0">
-            <ShoppingCart className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+      {/* Brand */}
+      <div className={`h-16 px-3.5 flex items-center border-b border-slate-200 gap-2.5 ${isCollapsed ? 'justify-center' : ''}`}>
+        <div className="w-8 h-8 rounded-xl bg-brand-600 text-white flex items-center justify-center font-semibold text-[13px] shrink-0 shadow-[inset_0_1px_0_rgb(255_255_255/0.15)]">
+          {initials || 'B'}
+        </div>
+        {!isCollapsed && (
+          <div className="flex-1 min-w-0 animate-in fade-in">
+            <p className="text-[13px] font-semibold text-slate-900 truncate leading-5">{storeName}</p>
+            <p className="text-xs text-slate-500 truncate leading-4">{isAdmin ? 'Store manager' : 'Cashier counter'}</p>
           </div>
+        )}
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 px-2.5 py-3 overflow-y-auto" aria-label="Main navigation">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const showGroup = item.group && item.group !== lastGroup;
+          lastGroup = item.group || lastGroup;
+          const count = item.badge === 'lowStock' ? lowStockCount : 0;
+
+          return (
+            <React.Fragment key={item.to}>
+              {showGroup &&
+                (isCollapsed ? (
+                  <div className="h-px bg-slate-200 my-2.5 mx-2" />
+                ) : (
+                  <p className="px-2.5 pt-4 pb-1.5 text-xs font-medium text-slate-400">{item.group}</p>
+                ))}
+              <NavLink
+                to={item.to}
+                end={item.to === '/'}
+                onClick={onCloseMobile}
+                title={isCollapsed ? item.label : undefined}
+                className={({ isActive }) =>
+                  `group relative flex items-center h-9 rounded-lg text-[13px] font-medium transition-colors duration-150 mb-0.5 ${
+                    isCollapsed ? 'justify-center' : 'gap-2.5 px-2.5'
+                  } ${
+                    isActive
+                      ? 'bg-brand-50 text-brand-700'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    {isActive && (
+                      <span className="absolute -left-2.5 top-2 bottom-2 w-[3px] rounded-r bg-brand-600 animate-in fade-in" />
+                    )}
+                    <Icon
+                      className={`w-[18px] h-[18px] shrink-0 ${isActive ? 'text-brand-600' : 'text-slate-400 group-hover:text-slate-600'}`}
+                      strokeWidth={1.8}
+                    />
+                    {!isCollapsed && <span className="flex-1 truncate">{item.label}</span>}
+                    {count > 0 &&
+                      (isCollapsed ? (
+                        <span className="absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full bg-amber-500" />
+                      ) : (
+                        <span className="tabular text-[11px] font-medium px-1.5 h-[18px] inline-flex items-center rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                          {count}
+                        </span>
+                      ))}
+                  </>
+                )}
+              </NavLink>
+            </React.Fragment>
+          );
+        })}
+      </nav>
+
+      {/* Footer */}
+      <div className="p-2.5 border-t border-slate-200 space-y-1">
+        <NavLink
+          to={isAdmin ? '/settings' : '/counter'}
+          onClick={onCloseMobile}
+          title={isLiveBackend ? `${api.backendName} connected` : 'Local mode'}
+          className={`flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-slate-300 transition-colors ${
+            isCollapsed ? 'justify-center h-9' : 'px-2.5 py-2'
+          }`}
+        >
+          <span className="relative flex w-2 h-2 shrink-0">
+            {isLiveBackend && <span className="absolute inset-0 rounded-full bg-brand-500 opacity-60 animate-ping" />}
+            <span className={`relative w-2 h-2 rounded-full ${isLiveBackend ? 'bg-brand-500' : 'bg-amber-500'}`} />
+          </span>
           {!isCollapsed && (
-            <div className="flex-1 min-w-0">
-              <h1 className="text-xs font-black text-white truncate leading-tight tracking-tight">
-                {settings.storeName || 'Bismillah Grocery'}
-              </h1>
-              <p className="text-[10px] text-emerald-400 font-semibold truncate mt-0.5">
-                {isAdmin ? 'Store Manager' : 'Cashier Counter'}
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-slate-800 truncate leading-4">
+                {isLiveBackend ? `${api.backendName} connected` : 'Local mode'}
+              </p>
+              <p className="text-xs text-slate-500 truncate leading-4">
+                {isLiveBackend ? 'Auto-synced' : isAdmin ? 'Click to connect' : 'Saved on this computer'}
               </p>
             </div>
           )}
-        </div>
-
-        {/* Desktop Collapse Toggle */}
-        <button
-          type="button"
-          onClick={toggleCollapse}
-          className="hidden lg:flex p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar (more screen space)'}
-        >
-          {isCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-        </button>
-      </div>
-
-      {/* Navigation Links */}
-      <div className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              onClick={onCloseMobile}
-              title={isCollapsed ? item.label : undefined}
-              className={({ isActive }) =>
-                `flex items-center rounded-xl text-xs font-medium transition-all duration-150 ${
-                  isCollapsed ? 'justify-center p-2.5' : 'gap-2.5 px-3 py-2'
-                } ${
-                  isActive
-                    ? item.highlight
-                      ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30 font-bold'
-                      : 'bg-slate-800 text-white font-bold'
-                    : item.highlight
-                    ? 'text-emerald-400 hover:bg-emerald-950/40 hover:text-emerald-300'
-                    : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-                }`
-              }
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              {!isCollapsed && <span className="flex-1 truncate">{item.label}</span>}
-              {!isCollapsed && item.highlight && (
-                <span className="text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
-                  POS
-                </span>
-              )}
-            </NavLink>
-          );
-        })}
-      </div>
-
-      {/* Footer: Backend status & Logout */}
-      <div className="p-2 border-t border-slate-800 bg-slate-950/40 space-y-1.5">
-        <NavLink
-          to="/settings"
-          onClick={onCloseMobile}
-          title={isCollapsed ? (isLiveBackend ? `${api.backendName} Live` : 'Local Demo Mode') : undefined}
-          className={`flex items-center rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors ${
-            isCollapsed ? 'justify-center p-2' : 'justify-between p-2'
-          }`}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <div
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                isLiveBackend ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-              }`}
-            />
-            {!isCollapsed && (
-              <div className="min-w-0">
-                <p className="text-[11px] font-bold text-slate-200 truncate">
-                  {isLiveBackend ? `${api.backendName} Live` : 'Local Mode'}
-                </p>
-                <p className="text-[9px] text-slate-400 truncate">
-                  {isLiveBackend ? 'Auto-synced' : 'Click to connect'}
-                </p>
-              </div>
-            )}
-          </div>
-          {!isCollapsed && <Database className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
         </NavLink>
 
-        {/* Quick Logout Button */}
-        <button
-          type="button"
-          onClick={handleLogout}
-          title={isCollapsed ? 'Log Out' : undefined}
-          className={`w-full flex items-center rounded-xl text-xs font-semibold text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 transition-colors cursor-pointer ${
-            isCollapsed ? 'justify-center p-2' : 'gap-2 px-3 py-1.5'
-          }`}
-        >
-          <LogOut className="w-3.5 h-3.5 shrink-0" />
-          {!isCollapsed && <span>Log Out</span>}
-        </button>
+        <div className={`flex ${isCollapsed ? 'flex-col' : ''} gap-1`}>
+          <button
+            type="button"
+            onClick={handleLogout}
+            title="Log out"
+            className={`flex-1 flex items-center h-9 rounded-lg text-[13px] font-medium text-slate-600 hover:text-rose-700 hover:bg-rose-50 transition-colors ${
+              isCollapsed ? 'justify-center' : 'gap-2.5 px-2.5'
+            }`}
+          >
+            <LogOut className="w-[18px] h-[18px] shrink-0" strokeWidth={1.8} />
+            {!isCollapsed && <span>Log out</span>}
+          </button>
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            className="hidden lg:flex items-center justify-center w-9 h-9 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0 self-center"
+            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {isCollapsed ? <PanelLeftOpen className="w-[18px] h-[18px]" /> : <PanelLeftClose className="w-[18px] h-[18px]" />}
+          </button>
+        </div>
       </div>
     </aside>
   );

@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
+import { useAuth } from '../context/AuthContext';
 import { ProductCard } from '../components/pos/ProductCard';
 import { CartItem } from '../components/pos/CartItem';
 import { CustomerSelectModal } from '../components/pos/CustomerSelectModal';
 import { PaymentModal } from '../components/pos/PaymentModal';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
 import { SearchInput } from '../components/common/SearchInput';
-import { Button } from '../components/common/Button';
+import { Button, Kbd } from '../components/common/Button';
+import { EmptyState } from '../components/common/Table';
 import { formatCurrency } from '../utils/formatters';
 import { createBarcodeListener } from '../utils/barcode';
 import { api } from '../services/api';
@@ -17,12 +20,8 @@ import {
   User,
   CreditCard,
   Barcode,
-  Layers,
   ArrowRight,
   Database,
-  CloudAlert,
-  Sparkles,
-  ExternalLink
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -50,6 +49,8 @@ export function PosBilling() {
   } = useStore();
 
   const { showToast } = useToast();
+  const confirm = useConfirm();
+  const { isAdmin } = useAuth();
 
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
@@ -74,6 +75,7 @@ export function PosBilling() {
 
       if (match) {
         addToCart(match, 1);
+        setSearch('');
         showToast(`Scanned: ${match.name}`, 'success');
       } else {
         showToast(`Barcode not recognized: ${scannedBarcode}`, 'warning');
@@ -115,16 +117,51 @@ export function PosBilling() {
     );
   });
 
+  // Enter in the search box: add the exact barcode/SKU match, or the only matching product.
+  // Handles scanners typing into the focused search box as well as manual entry.
+  const handleSearchKeyDown = (e) => {
+    if (e.key !== 'Enter') return;
+    const q = search.trim();
+    if (!q) return;
+    e.preventDefault();
+    e.stopPropagation(); // the global scanner listener must not add it a second time
+
+    const exact = products.find(
+      (p) =>
+        p.status !== 'INACTIVE' &&
+        (p.barcode === q || String(p.sku || '').toLowerCase() === q.toLowerCase())
+    );
+    const match = exact || (filteredProducts.length === 1 ? filteredProducts[0] : null);
+
+    if (match) {
+      addToCart(match, 1);
+      setSearch('');
+      showToast(`Added: ${match.name}`, 'success');
+    } else if (filteredProducts.length > 1) {
+      showToast(`${filteredProducts.length} products match. Click the one you want.`, 'info');
+    } else {
+      showToast(`No product found for "${q}"`, 'warning');
+    }
+  };
+
+  const handleReceiptClose = () => {
+    setIsReceiptModalOpen(false);
+    setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
   const handleSaleSuccess = (saleRecord) => {
     setCompletedSale(saleRecord);
     setIsReceiptModalOpen(true);
   };
 
-  const handleClearDummyData = () => {
+  const handleClearDummyData = async () => {
     if (
-      !window.confirm(
-        'Are you sure you want to remove all dummy products and demo data? Your database will be completely clean and empty, ready for your real Google Sheet items.'
-      )
+      !(await confirm({
+        title: 'Remove all sample data?',
+        message: 'Every demo product and sale is deleted so you can start with an empty catalog.',
+        confirmText: 'Remove sample data',
+        tone: 'danger',
+      }))
     ) {
       return;
     }
@@ -134,125 +171,139 @@ export function PosBilling() {
     showToast('All dummy products removed. Store is clean.', 'success');
   };
 
+  const [isEditingBillDiscount, setIsEditingBillDiscount] = useState(false);
+  const [billDiscountInput, setBillDiscountInput] = useState('');
+  const billDiscountValue = parseFloat(billDiscountInput);
+  const billDiscountError =
+    billDiscountInput.trim() === ''
+      ? ''
+      : Number.isNaN(billDiscountValue)
+      ? 'Numbers only'
+      : billDiscountValue < 0
+      ? "Can't be negative"
+      : billDiscountValue > cartSubtotal
+      ? `Max ${formatCurrency(cartSubtotal, currencySymbol)}`
+      : '';
+
+  const applyBillDiscount = () => {
+    if (billDiscountError) return;
+    setCartDiscount(billDiscountInput.trim() === '' ? 0 : billDiscountValue);
+    setIsEditingBillDiscount(false);
+  };
+
   const allowNegativeStock =
     settings.allowNegativeStock === 'true' || settings.allowNegativeStock === true;
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const activeCount = products.filter((p) => p.status !== 'INACTIVE').length;
+
+  const chip = (isOn) =>
+    `h-8 px-3 rounded-full text-[13px] font-medium border transition-colors whitespace-nowrap ${
+      isOn
+        ? 'bg-slate-900 border-slate-900 text-white'
+        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900'
+    }`;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden select-none gap-2">
-      {/* Top Notice when in Local Mode */}
-      {!isLiveBackend && (
-        <div className="px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs text-amber-900 shrink-0">
+    <div className="flex-1 flex flex-col h-full overflow-hidden gap-2">
+      {/* Local mode notice */}
+      {!isLiveBackend && isAdmin && (
+        <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-[13px] text-amber-900 shrink-0 animate-in fade-in">
           <div className="flex items-center gap-2">
-            <Database className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+            <Database className="w-4 h-4 text-amber-600 shrink-0" />
             <span>
-              <strong>Local Mode:</strong> Google Sheet abhi connect nahi hai. Data browser me save ho raha hai.
+              <span className="font-semibold">Local mode.</span> No database is connected yet, so sales are saved in this browser only.
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleClearDummyData}
-              className="text-rose-700 hover:text-rose-900 font-bold underline"
-              title="Remove sample items and start with 0 products"
-            >
-              Clear Dummy Data
-            </button>
+            <Button variant="ghost" size="xs" onClick={handleClearDummyData} className="text-amber-800 hover:bg-amber-100">
+              Clear samples
+            </Button>
             <Link
               to="/settings"
-              className="px-2 py-0.5 rounded bg-amber-600 text-white font-bold hover:bg-amber-700 transition-colors"
+              className="h-7 px-2.5 inline-flex items-center rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 transition-colors"
             >
-              Connect Google Sheet
+              Connect database
             </Link>
           </div>
         </div>
       )}
 
-      {/* Mobile Tab Switcher (< 1024px) */}
-      <div className="lg:hidden flex items-center bg-slate-200/80 p-1 rounded-xl shrink-0 text-xs font-bold">
+      {/* Mobile tab switcher */}
+      <div className="lg:hidden grid grid-cols-2 p-1 gap-1 bg-slate-100 border border-slate-200 rounded-xl shrink-0 text-[13px] font-medium" role="tablist">
         <button
           type="button"
+          role="tab"
+          aria-selected={mobileTab === 'catalog'}
           onClick={() => setMobileTab('catalog')}
-          className={`flex-1 py-1.5 rounded-lg transition-all ${
-            mobileTab === 'catalog'
-              ? 'bg-white text-slate-900 shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
+          className={`h-8 rounded-lg transition-all ${
+            mobileTab === 'catalog' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
           }`}
         >
-          Product Catalog ({filteredProducts.length})
+          Products <span className="text-slate-400 tabular">({filteredProducts.length})</span>
         </button>
         <button
           type="button"
+          role="tab"
+          aria-selected={mobileTab === 'cart'}
           onClick={() => setMobileTab('cart')}
-          className={`flex-1 py-1.5 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-            mobileTab === 'cart'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900'
+          className={`h-8 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
+            mobileTab === 'cart' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
           }`}
         >
           <ShoppingCart className="w-3.5 h-3.5" />
-          Cart ({totalCartCount}) • {formatCurrency(cartTotal, currencySymbol)}
+          Bill <span className="tabular">({totalCartCount})</span>
         </button>
       </div>
 
-      {/* Main Dual Pane Layout */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-2.5 overflow-hidden">
-        {/* LEFT SECTION: Catalog & Search */}
-        <div
-          className={`flex-1 flex-col bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden ${
+      <div className="flex-1 flex flex-col lg:flex-row gap-2 overflow-hidden min-h-0">
+        {/* Catalog */}
+        <section
+          aria-label="Products"
+          className={`flex-1 min-w-0 flex-col bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden ${
             mobileTab === 'catalog' ? 'flex' : 'hidden lg:flex'
           }`}
         >
-          {/* Search & Barcode helper bar */}
-          <div className="p-2 sm:p-2.5 border-b border-slate-100 flex items-center gap-2 bg-slate-50/50 shrink-0">
+          <div className="p-3 border-b border-slate-200 flex items-center gap-2 shrink-0">
             <SearchInput
               inputRef={searchInputRef}
               value={search}
               onChange={setSearch}
-              placeholder="Search products by name, SKU or barcode (F2)..."
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Scan a barcode or type a name, then Enter"
               className="flex-1 w-full"
+              shortcut="F2"
               autoFocus
             />
-            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-500 font-mono shrink-0">
-              <Barcode className="w-4 h-4 text-emerald-600" />
-              <span>Scanner Ready</span>
+            <div className="hidden md:flex items-center gap-1.5 h-[38px] px-3 border border-slate-200 rounded-xl text-xs text-slate-500 shrink-0">
+              <span className="relative flex w-2 h-2">
+                <span className="absolute inset-0 rounded-full bg-brand-500 opacity-60 animate-ping" />
+                <span className="relative w-2 h-2 rounded-full bg-brand-500" />
+              </span>
+              <Barcode className="w-4 h-4 text-slate-400" />
+              Scanner ready
             </div>
           </div>
 
-          {/* Category Filter Pills */}
-          <div className="px-2.5 py-1.5 border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0 bg-white">
-            <button
-              type="button"
-              onClick={() => setSelectedCategory('ALL')}
-              className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                selectedCategory === 'ALL'
-                  ? 'bg-slate-900 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-              }`}
-            >
-              All Items ({products.filter((p) => p.status !== 'INACTIVE').length})
+          <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+            <button type="button" onClick={() => setSelectedCategory('ALL')} className={chip(selectedCategory === 'ALL')}>
+              All <span className="opacity-60 tabular">{activeCount}</span>
             </button>
             {categories.map((c) => (
               <button
                 key={c.categoryId}
                 type="button"
                 onClick={() => setSelectedCategory(c.categoryId)}
-                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
-                  selectedCategory === c.categoryId
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-                }`}
+                className={chip(selectedCategory === c.categoryId)}
               >
                 {c.name}
               </button>
             ))}
           </div>
 
-          {/* Products Grid (Fluid auto-fill minmax grid to prevent squishing) */}
-          <div className="flex-1 p-2 sm:p-2.5 overflow-y-auto">
+          <div className="flex-1 p-3 overflow-y-auto bg-slate-50/60">
             {filteredProducts.length > 0 ? (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(155px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 sm:gap-2.5">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-2.5">
                 {filteredProducts.map((p) => (
                   <ProductCard
                     key={p.productId}
@@ -264,60 +315,74 @@ export function PosBilling() {
                 ))}
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 py-12">
-                <ShoppingCart className="w-10 h-10 text-slate-300 stroke-1 mb-2" />
-                <p className="text-sm font-semibold text-slate-600">No products available</p>
-                <p className="text-xs text-slate-400 mt-1 max-w-sm text-center">
-                  {search
-                    ? 'No products match your search query.'
-                    : 'Your catalog is clean and empty. Add new products or connect your Google Sheet!'}
-                </p>
-                <Link to="/products" className="mt-3">
-                  <Button variant="primary" size="sm">
-                    + Add New Product
-                  </Button>
-                </Link>
-              </div>
+              <EmptyState
+                icon={search ? Barcode : ShoppingCart}
+                title={search ? `Nothing matches "${search}"` : 'No products yet'}
+                description={
+                  search
+                    ? 'Check the spelling or scan the barcode again.'
+                    : 'Add products to your catalog to start billing.'
+                }
+                action={
+                  isAdmin && !search ? (
+                    <Link to="/products">
+                      <Button variant="primary" size="sm">
+                        Add products
+                      </Button>
+                    </Link>
+                  ) : null
+                }
+                className="h-full"
+              />
             )}
           </div>
-        </div>
+        </section>
 
-        {/* RIGHT SECTION: Cart Panel & Checkout */}
-        <div
-          className={`w-full lg:w-72 xl:w-80 2xl:w-96 flex-col bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden shrink-0 ${
+        {/* Bill */}
+        <aside
+          aria-label="Current bill"
+          className={`w-full lg:w-[340px] xl:w-[380px] flex-col bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden shrink-0 ${
             mobileTab === 'cart' ? 'flex' : 'hidden lg:flex'
           }`}
         >
-          {/* Customer Header */}
-          <div className="p-2.5 border-b border-slate-100 bg-slate-50/75 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs shrink-0">
-                <User className="w-3.5 h-3.5 text-emerald-700" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-bold text-slate-900 truncate">
-                  {activeCustomer?.name || 'Walk-in Customer'}
-                </p>
-                {Number(activeCustomer?.outstandingBalance) > 0 && (
-                  <p className="text-[10px] text-amber-700 font-semibold truncate">
-                    Bal: {formatCurrency(activeCustomer.outstandingBalance, currencySymbol)}
-                  </p>
-                )}
-              </div>
-            </div>
+          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
+            <h2 className="text-[15px] font-semibold text-slate-900">
+              Current bill <span className="text-slate-400 font-normal tabular">· {totalCartCount} items</span>
+            </h2>
+            {cart.length > 0 && (
+              <Button
+                variant="ghost"
+                size="xs"
+                icon={Trash2}
+                onClick={clearCart}
+                className="text-slate-500 hover:text-rose-700 hover:bg-rose-50"
+                title="Clear bill (F4)"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsCustomerModalOpen(true)}
-              className="text-xs py-1 px-2 bg-white"
-            >
+          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-3 shrink-0">
+            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+              <User className="w-4 h-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-medium text-slate-900 truncate">{activeCustomer?.name || 'Walk-in customer'}</p>
+              {Number(activeCustomer?.outstandingBalance) > 0 ? (
+                <p className="text-xs text-amber-700 tabular truncate">
+                  Khata {formatCurrency(activeCustomer.outstandingBalance, currencySymbol)}
+                </p>
+              ) : (
+                <p className="text-xs text-slate-500 truncate">Add a customer for khata sales</p>
+              )}
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => setIsCustomerModalOpen(true)}>
               Change
             </Button>
           </div>
 
-          {/* Cart Items List */}
-          <div className="flex-1 p-2 sm:p-2.5 overflow-y-auto space-y-2">
+          <div className="flex-1 p-3 overflow-y-auto space-y-2 min-h-0">
             {cart.length > 0 ? (
               cart.map((item) => (
                 <CartItem
@@ -330,116 +395,124 @@ export function PosBilling() {
                 />
               ))
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 py-12 text-center">
-                <ShoppingCart className="w-10 h-10 text-slate-200 stroke-1 mb-2" />
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Cart is empty
-                </p>
-                <p className="text-[11px] text-slate-400 mt-1 max-w-[180px]">
-                  Click items from catalog or scan product barcode
-                </p>
-              </div>
+              <EmptyState
+                icon={ShoppingCart}
+                title="The bill is empty"
+                description="Tap a product or scan a barcode to add it."
+                className="h-full"
+              />
             )}
           </div>
 
-          {/* Financial Summary & Checkout Footer */}
-          <div className="p-2.5 sm:p-3 border-t border-slate-200 bg-slate-50/70 space-y-2 shrink-0">
-            {/* Subtotal, Discount, Tax */}
-            <div className="space-y-1 text-xs text-slate-600">
-              <div className="flex justify-between">
-                <span>Subtotal:</span>
-                <span className="font-semibold text-slate-800">
-                  {formatCurrency(cartSubtotal, currencySymbol)}
-                </span>
-              </div>
+          <div className="px-4 py-3 border-t border-slate-200 bg-slate-50 space-y-1.5 shrink-0 text-[13px]">
+            <div className="flex justify-between text-slate-600">
+              <span>Subtotal</span>
+              <span className="text-slate-900 tabular">{formatCurrency(cartSubtotal, currencySymbol)}</span>
+            </div>
 
-              <div className="flex justify-between items-center text-rose-600">
-                <div className="flex items-center gap-1">
-                  <span>Discount:</span>
+            <div className="flex justify-between items-center text-slate-600 min-h-7">
+              {isEditingBillDiscount ? (
+                <div className="flex items-start gap-1.5 w-full animate-in fade-in">
+                  <div className="flex-1">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      value={billDiscountInput}
+                      onChange={(e) => setBillDiscountInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          applyBillDiscount();
+                        } else if (e.key === 'Escape') {
+                          setIsEditingBillDiscount(false);
+                        }
+                      }}
+                      autoFocus
+                      placeholder="Bill discount"
+                      aria-label="Bill discount"
+                      aria-invalid={billDiscountError ? 'true' : undefined}
+                      className={`w-full h-7 px-2 text-xs tabular rounded-lg border bg-white focus:outline-none focus:ring-[3px] ${
+                        billDiscountError
+                          ? 'border-rose-500 focus:ring-rose-600/15'
+                          : 'border-slate-300 focus:border-brand-600 focus:ring-brand-600/20'
+                      }`}
+                    />
+                    {billDiscountError && <p className="text-xs text-rose-600 mt-1">{billDiscountError}</p>}
+                  </div>
+                  <Button size="xs" onClick={applyBillDiscount} disabled={Boolean(billDiscountError)}>
+                    Apply
+                  </Button>
+                  <Button size="xs" variant="ghost" onClick={() => setIsEditingBillDiscount(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <>
                   <button
                     type="button"
                     onClick={() => {
-                      const val = prompt('Enter bill discount amount (PKR):', cartDiscount);
-                      if (val !== null) setCartDiscount(Math.max(0, parseFloat(val) || 0));
+                      setBillDiscountInput(cartDiscount ? String(cartDiscount) : '');
+                      setIsEditingBillDiscount(true);
                     }}
-                    className="text-[10px] text-slate-400 hover:text-slate-600 underline"
+                    className="inline-flex items-center gap-1 hover:text-slate-900 underline decoration-slate-300 underline-offset-2"
                   >
-                    (edit)
+                    Discount
                   </button>
-                </div>
-                <span className="font-semibold">
-                  -{formatCurrency(cartDiscount, currencySymbol)}
-                </span>
-              </div>
-
-              {cartTax > 0 && (
-                <div className="flex justify-between">
-                  <span>Tax ({settings.taxRate}%):</span>
-                  <span className="font-semibold text-slate-800">
-                    +{formatCurrency(cartTax, currencySymbol)}
+                  <span className={`tabular ${cartDiscount > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
+                    −{formatCurrency(cartDiscount, currencySymbol)}
                   </span>
-                </div>
+                </>
               )}
             </div>
 
-            {/* Grand Total */}
-            <div className="pt-1.5 border-t border-slate-200 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                  Total Payable
-                </span>
-                <span className="text-lg font-black text-slate-950 font-mono">
-                  {formatCurrency(cartTotal, currencySymbol)}
-                </span>
+            {cartTax > 0 && (
+              <div className="flex justify-between text-slate-600">
+                <span>Tax ({settings.taxRate}%)</span>
+                <span className="text-slate-900 tabular">{formatCurrency(cartTax, currencySymbol)}</span>
               </div>
+            )}
 
-              {cart.length > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={Trash2}
-                  onClick={clearCart}
-                  className="text-slate-400 hover:text-rose-600 text-xs px-2 py-1"
-                  title="Clear Cart (F4)"
-                >
-                  Clear
-                </Button>
-              )}
+            <div className="pt-2 mt-1 border-t border-dashed border-slate-300 flex items-baseline justify-between">
+              <span className="text-sm font-medium text-slate-700">Total</span>
+              <span key={cartTotal} className="text-2xl font-semibold text-slate-900 tabular tracking-tight animate-bump inline-block">
+                {formatCurrency(cartTotal, currencySymbol)}
+              </span>
             </div>
 
-            {/* Checkout Button */}
             <Button
               variant="primary"
-              size="md"
+              size="lg"
               disabled={cart.length === 0}
               onClick={() => setIsPaymentModalOpen(true)}
               icon={CreditCard}
-              className="w-full py-2.5 text-xs sm:text-sm font-bold shadow-md shadow-emerald-600/20"
+              className="w-full mt-2"
             >
-              Pay & Checkout (F8)
+              Charge {formatCurrency(cartTotal, currencySymbol)}
+              <Kbd onDark className="ml-auto">F8</Kbd>
             </Button>
           </div>
-        </div>
+        </aside>
       </div>
 
-      {/* Floating Checkout Button for Mobile (< 1024px) when viewing Catalog */}
+      {/* Mobile: floating bill button while browsing products */}
       {mobileTab === 'catalog' && cart.length > 0 && (
-        <div className="lg:hidden fixed bottom-3 inset-x-3 z-30 animate-in slide-in-from-bottom-3 duration-150">
+        <div className="lg:hidden fixed bottom-3 inset-x-3 z-30 animate-in fade-in slide-in-from-bottom-3 duration-300">
           <button
             type="button"
             onClick={() => setMobileTab('cart')}
-            className="w-full p-3 bg-slate-900 text-white rounded-2xl shadow-xl flex items-center justify-between font-bold text-sm"
+            className="w-full h-12 px-4 bg-slate-900 text-white rounded-2xl shadow-xl flex items-center justify-between text-sm font-medium"
           >
-            <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center text-xs">
+            <span className="flex items-center gap-2">
+              <span className="min-w-6 h-6 px-1.5 rounded-full bg-white/15 flex items-center justify-center text-xs tabular">
                 {totalCartCount}
               </span>
-              <span>View Cart</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-emerald-400 font-mono">
-              <span>{formatCurrency(cartTotal, currencySymbol)}</span>
+              View bill
+            </span>
+            <span className="flex items-center gap-1.5 tabular">
+              {formatCurrency(cartTotal, currencySymbol)}
               <ArrowRight className="w-4 h-4" />
-            </div>
+            </span>
           </button>
         </div>
       )}
@@ -459,7 +532,7 @@ export function PosBilling() {
 
       <ReceiptModal
         isOpen={isReceiptModalOpen}
-        onClose={() => setIsReceiptModalOpen(false)}
+        onClose={handleReceiptClose}
         saleData={completedSale}
       />
     </div>

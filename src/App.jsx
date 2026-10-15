@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastProvider } from './context/ToastContext';
+import { ConfirmProvider } from './context/ConfirmContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { StoreProvider } from './context/StoreContext';
 import { AppLayout } from './components/layout/AppLayout';
@@ -20,6 +21,7 @@ import { Expenses } from './pages/Expenses';
 import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
+import { CashierCounter } from './pages/CashierCounter';
 
 function ProtectedRoute({ children, adminOnly = false }) {
   const { isAuthenticated, isAdmin } = useAuth();
@@ -35,6 +37,10 @@ function ProtectedRoute({ children, adminOnly = false }) {
   return children;
 }
 
+function AdminOnly({ children }) {
+  return <ProtectedRoute adminOnly>{children}</ProtectedRoute>;
+}
+
 function PublicLoginRoute() {
   const { isAuthenticated, isCashier } = useAuth();
   if (isAuthenticated) {
@@ -47,6 +53,7 @@ export function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
+      <ConfirmProvider>
         <AuthProvider>
           <StoreProvider>
             <Routes>
@@ -62,38 +69,29 @@ export function App() {
                   </ProtectedRoute>
                 }
               >
-                <Route index element={<Dashboard />} />
+                {/* Counter cashiers: billing only */}
                 <Route path="pos" element={<PosBilling />} />
-                <Route path="products" element={<Products />} />
-                <Route path="categories" element={<Categories />} />
-                <Route path="inventory" element={<Inventory />} />
-                <Route path="purchases" element={<Purchases />} />
-                <Route path="suppliers" element={<Suppliers />} />
-                <Route path="sales" element={<Sales />} />
-                <Route path="customers" element={<Customers />} />
-                <Route path="expenses" element={<Expenses />} />
-                <Route path="reports" element={<Reports />} />
-                <Route
-                  path="settings"
-                  element={
-                    <ProtectedRoute adminOnly>
-                      <Settings />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="users"
-                  element={
-                    <ProtectedRoute adminOnly>
-                      <Users />
-                    </ProtectedRoute>
-                  }
-                />
+                <Route path="counter" element={<CashierCounter />} />
+
+                {/* Store manager only */}
+                <Route index element={<AdminOnly><Dashboard /></AdminOnly>} />
+                <Route path="products" element={<AdminOnly><Products /></AdminOnly>} />
+                <Route path="categories" element={<AdminOnly><Categories /></AdminOnly>} />
+                <Route path="inventory" element={<AdminOnly><Inventory /></AdminOnly>} />
+                <Route path="purchases" element={<AdminOnly><Purchases /></AdminOnly>} />
+                <Route path="suppliers" element={<AdminOnly><Suppliers /></AdminOnly>} />
+                <Route path="sales" element={<AdminOnly><Sales /></AdminOnly>} />
+                <Route path="customers" element={<AdminOnly><Customers /></AdminOnly>} />
+                <Route path="expenses" element={<AdminOnly><Expenses /></AdminOnly>} />
+                <Route path="reports" element={<AdminOnly><Reports /></AdminOnly>} />
+                <Route path="settings" element={<AdminOnly><Settings /></AdminOnly>} />
+                <Route path="users" element={<AdminOnly><Users /></AdminOnly>} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </StoreProvider>
         </AuthProvider>
+      </ConfirmProvider>
       </ToastProvider>
     </BrowserRouter>
   );

@@ -1,17 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
 import { api } from '../services/api';
 import { formatCurrency, formatShortDate } from '../utils/formatters';
 import { exportToCsv } from '../utils/exportCsv';
 import { Table } from '../components/common/Table';
 import { Pagination } from '../components/common/Pagination';
 import { Button } from '../components/common/Button';
-import { Badge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
 import { Input, Select } from '../components/common/Input';
-import { Card } from '../components/common/Card';
-import { Wallet, Plus, Trash2, Download, RefreshCw, DollarSign, Calendar } from 'lucide-react';
+import { PageHeader } from '../components/common/Card';
+import { FormErrorSummary } from '../components/common/FormErrorSummary';
+import { useFormValidation, rules } from '../hooks/useFormValidation';
+import { Wallet, Plus, Trash2, Download, RefreshCw, Calendar } from 'lucide-react';
 
 const EXPENSE_CATEGORIES = [
   { value: 'RENT', label: 'Shop Rent & Lease' },
@@ -27,6 +29,7 @@ const EXPENSE_CATEGORIES = [
 export function Expenses() {
   const { currencySymbol } = useStore();
   const { showToast } = useToast();
+  const confirm = useConfirm();
 
   const [expenses, setExpenses] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,6 +49,26 @@ export function Expenses() {
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const v = useFormValidation(formData, {
+    title: (val) => {
+      const t = val.trim();
+      if (!t) return 'Describe what this expense was for';
+      return t.length < 3 ? 'Description must be at least 3 characters' : '';
+    },
+    category: (val) => (!val ? 'Choose a category' : ''),
+    amount: rules.positive('Amount'),
+    date: (val) => {
+      if (!val) return 'Choose the payment date';
+      return val > todayIso ? "Date can't be in the future" : '';
+    },
+  });
+
+  const openAddModal = () => {
+    v.reset();
+    setIsModalOpen(true);
+  };
 
   const loadExpenses = async () => {
     try {
@@ -78,17 +101,13 @@ export function Expenses() {
 
   const handleCreateExpense = async (e) => {
     e.preventDefault();
-    const amt = parseFloat(formData.amount) || 0;
-    if (amt <= 0) {
-      showToast('Amount must be greater than zero', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsSubmitting(true);
-      const res = await api.saveExpense(formData);
+      const res = await api.saveExpense({ ...formData, title: formData.title.trim() });
       if (res.success) {
-        showToast('Expense recorded successfully to Google Sheets', 'success');
+        showToast(`Expense of ${formatCurrency(formData.amount, currencySymbol)} recorded`, 'success');
         await loadExpenses();
         setIsModalOpen(false);
         setFormData({
@@ -111,7 +130,7 @@ export function Expenses() {
   };
 
   const handleDeleteExpense = async (exp) => {
-    if (!window.confirm(`Delete expense "${exp.title}" (${formatCurrency(exp.amount, currencySymbol)})?`)) {
+    if (!(await confirm({ title: 'Delete this expense?', message: `"${exp.title}" for ${formatCurrency(exp.amount, currencySymbol)} will be removed from your records.`, confirmText: 'Delete expense', tone: 'danger' }))) {
       return;
     }
 
@@ -146,8 +165,8 @@ export function Expenses() {
       key: 'title',
       render: (row) => (
         <div>
-          <span className="font-bold text-slate-900 leading-snug">{row.title}</span>
-          <p className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1">
+          <span className="font-semibold text-slate-900 leading-snug">{row.title}</span>
+          <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1">
             <Calendar className="w-3 h-3 text-slate-400" />
             {formatShortDate(row.date || row.createdAt)}
           </p>
@@ -167,7 +186,7 @@ export function Expenses() {
       header: 'Amount Paid',
       key: 'amount',
       render: (row) => (
-        <span className="font-mono font-bold text-slate-900 text-sm">
+        <span className="font-mono font-semibold text-slate-900 text-sm">
           {formatCurrency(row.amount, currencySymbol)}
         </span>
       ),
@@ -197,8 +216,9 @@ export function Expenses() {
         <button
           type="button"
           onClick={() => handleDeleteExpense(row)}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 transition-colors"
+          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
           title="Delete expense"
+          aria-label={`Delete ${row.title}`}
         >
           <Trash2 className="w-4 h-4" />
         </button>
@@ -207,47 +227,41 @@ export function Expenses() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">Operating Expenses</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Record store utility bills, shop rent, staff wages, and daily operating costs.
-          </p>
-        </div>
+      <PageHeader
+        title="Expenses"
+        description="Rent, bills, wages and other running costs."
+        actions={
+          <>
+            <Button variant="ghost" icon={RefreshCw} onClick={loadExpenses} aria-label="Refresh expenses">
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+            <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
+              Export
+            </Button>
+            <Button variant="primary" icon={Plus} onClick={openAddModal}>
+              Add expense
+            </Button>
+          </>
+        }
+      />
 
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" icon={RefreshCw} onClick={loadExpenses}>
-            Sync
-          </Button>
-          <Button variant="outline" size="sm" icon={Download} onClick={handleExportCsv}>
-            Export CSV
-          </Button>
-          <Button
-            variant="primary"
-            size="md"
-            icon={Plus}
-            onClick={() => setIsModalOpen(true)}
-            className="font-bold shadow-sm"
-          >
-            Add Expense
-          </Button>
-        </div>
-      </div>
-
-      {/* Expense Summary KPI Banner */}
-      <div className="p-4 bg-gradient-to-r from-amber-600 to-amber-700 rounded-2xl text-white flex items-center justify-between shadow-xs">
+      {/* Expense total */}
+      <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between animate-rise">
         <div>
-          <p className="text-xs font-bold uppercase tracking-wider text-amber-200">
-            Total Recorded Expenses
+          <p className="text-[13px] text-slate-500">
+            {selectedCategory === 'ALL'
+              ? 'Total recorded expenses'
+              : `Total for ${EXPENSE_CATEGORIES.find((c) => c.value === selectedCategory)?.label}`}
           </p>
-          <p className="text-2xl font-black mt-0.5 tracking-tight">
+          <p className="text-2xl font-semibold mt-1 tracking-tight tabular text-slate-900">
             {formatCurrency(totalExpenseSum, currencySymbol)}
           </p>
+          <p className="text-xs text-slate-500 mt-1 tabular">{filteredExpenses.length} entries</p>
         </div>
-        <div className="p-3 bg-white/10 rounded-2xl">
-          <Wallet className="w-6 h-6 text-white" />
+        <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center">
+          <Wallet className="w-5 h-5" strokeWidth={1.8} />
         </div>
       </div>
 
@@ -256,23 +270,23 @@ export function Expenses() {
         <button
           type="button"
           onClick={() => setSelectedCategory('ALL')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+          className={`h-8 px-3 rounded-full text-[13px] font-medium border transition-colors whitespace-nowrap ${
             selectedCategory === 'ALL'
-              ? 'bg-slate-900 text-white'
-              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+              ? 'bg-slate-900 border-slate-900 text-white'
+              : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900'
           }`}
         >
-          All Categories
+          All
         </button>
         {EXPENSE_CATEGORIES.map((c) => (
           <button
             key={c.value}
             type="button"
             onClick={() => setSelectedCategory(c.value)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+            className={`h-8 px-3 rounded-full text-[13px] font-medium border transition-colors whitespace-nowrap ${
               selectedCategory === c.value
-                ? 'bg-emerald-600 text-white'
-                : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                ? 'bg-slate-900 border-slate-900 text-white'
+                : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900'
             }`}
           >
             {c.label}
@@ -281,13 +295,15 @@ export function Expenses() {
       </div>
 
       {/* Table Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
           data={paginatedExpenses}
           isLoading={isLoading}
           keyField="expenseId"
-          emptyMessage="No expenses recorded for this category."
+          emptyMessage="No expenses here yet"
+          emptyDescription="Record rent, bills and wages to see your true profit."
+          emptyAction={<Button size="sm" icon={Plus} onClick={openAddModal}>Add expense</Button>}
         />
 
         <Pagination
@@ -303,50 +319,67 @@ export function Expenses() {
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title="Record Operating Expense"
-        maxWidth="max-w-md"
+        title="Record expense"
+        maxWidth="max-w-lg"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setIsModalOpen(false)} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" form="expense-form" variant="primary" isLoading={isSubmitting} icon={Wallet}>
+              Save expense
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleCreateExpense} className="space-y-4">
+        <form id="expense-form" ref={v.formRef} onSubmit={handleCreateExpense} noValidate className="space-y-4">
+          <FormErrorSummary validation={v} />
           <Input
-            label="Expense Description *"
+            label="Description *"
             value={formData.title}
             onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-            placeholder="e.g. Commercial Electricity Bill - September"
-            required
+            placeholder="e.g. Electricity bill, September"
             autoFocus
+            {...v.field('title')}
           />
 
           <Select
-            label="Expense Category *"
+            label="Category *"
             options={EXPENSE_CATEGORIES}
             value={formData.category}
             onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-            required
+            {...v.field('category')}
           />
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label={`Amount Paid (${currencySymbol}) *`}
+              label="Amount *"
               type="number"
+              inputMode="decimal"
               step="any"
+              min="0"
               value={formData.amount}
               onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
               placeholder="0.00"
-              required
+              suffix={currencySymbol}
+              className="tabular"
+              {...v.field('amount')}
             />
 
             <Input
-              label="Payment Date *"
+              label="Payment date *"
               type="date"
+              max={todayIso}
               value={formData.date}
               onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-              required
+              {...v.field('date')}
+              isValid={false}
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select
-              label="Payment Method"
+              label="Payment method"
               options={[
                 { value: 'CASH', label: 'Cash' },
                 { value: 'BANK_TRANSFER', label: 'Bank Transfer' },
@@ -358,28 +391,21 @@ export function Expenses() {
             />
 
             <Input
-              label="Receipt / Bill Reference #"
+              label="Bill or receipt #"
               value={formData.reference}
               onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
               placeholder="e.g. LESCO-1122"
+              optional
             />
           </div>
 
           <Input
-            label="Optional Notes"
+            label="Notes"
             value={formData.notes}
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-            placeholder="e.g. Paid by cashier from counter cash"
+            placeholder="e.g. Paid from counter cash"
+            optional
           />
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-            <Button variant="outline" size="sm" onClick={() => setIsModalOpen(false)} disabled={isSubmitting}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting} icon={Wallet}>
-              Save Expense
-            </Button>
-          </div>
         </form>
       </Modal>
     </div>

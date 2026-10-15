@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
-import { Input, Select } from '../common/Input';
+import { Input, Select, FieldMessage } from '../common/Input';
+import { FormErrorSummary } from '../common/FormErrorSummary';
 import { useStore } from '../../context/StoreContext';
 import { useToast } from '../../context/ToastContext';
+import { useFormValidation } from '../../hooks/useFormValidation';
 import { api } from '../../services/api';
 import { formatCurrency } from '../../utils/formatters';
-import { Plus, Trash2, Boxes } from 'lucide-react';
+import { Plus, Trash2, Boxes, PackageOpen } from 'lucide-react';
 
 export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
   const { products, currencySymbol } = useStore();
@@ -17,30 +19,64 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
   const [selectedProductId, setSelectedProductId] = useState(products[0]?.productId || '');
   const [quantity, setQuantity] = useState('10');
   const [unitCost, setUnitCost] = useState('');
+  const [lineErrors, setLineErrors] = useState({});
   const [amountPaid, setAmountPaid] = useState('0');
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeSupplier = suppliers.find((s) => s.supplierId === supplierId);
+  const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unitCost, 0);
+
+  const v = useFormValidation(
+    { supplierId, items, amountPaid },
+    {
+      supplierId: (val) => (!val ? 'Choose a supplier' : ''),
+      items: (val) => (val.length === 0 ? 'Add at least one product to this order' : ''),
+      amountPaid: (val) => {
+        if (String(val).trim() === '') return '';
+        const n = Number(val);
+        if (Number.isNaN(n)) return 'Numbers only';
+        if (n < 0) return "Amount can't be negative";
+        if (subtotal > 0 && n > subtotal) return `Can't be more than the order total (${formatCurrency(subtotal, currencySymbol)})`;
+        return '';
+      },
+    }
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      setSupplierId((prev) => prev || suppliers[0]?.supplierId || '');
+      setSelectedProductId((prev) => prev || products[0]?.productId || '');
+      v.reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const handleAddItem = () => {
     const prod = products.find((p) => p.productId === selectedProductId);
-    if (!prod) return;
+    const errs = {};
+    if (!prod) errs.selectedProductId = 'Choose a product';
 
-    const qty = parseFloat(quantity) || 0;
-    const cost = parseFloat(unitCost || prod.costPrice) || 0;
+    const qty = parseFloat(quantity);
+    if (String(quantity).trim() === '' || Number.isNaN(qty)) errs.quantity = 'Enter a quantity';
+    else if (qty <= 0) errs.quantity = 'Must be more than 0';
 
-    if (qty <= 0) {
-      showToast('Quantity must be greater than 0', 'warning');
-      return;
-    }
+    const costRaw = unitCost === '' ? prod?.costPrice : unitCost;
+    const cost = parseFloat(costRaw);
+    if (Number.isNaN(cost)) errs.unitCost = 'Enter the unit cost';
+    else if (cost < 0) errs.unitCost = "Can't be negative";
 
-    // Check if already in items list
+    setLineErrors(errs);
+    if (Object.keys(errs).length) return;
+
     const existingIdx = items.findIndex((it) => it.productId === prod.productId);
     if (existingIdx !== -1) {
       const updated = [...items];
-      updated[existingIdx].quantity += qty;
-      updated[existingIdx].unitCost = cost;
+      updated[existingIdx] = {
+        ...updated[existingIdx],
+        quantity: updated[existingIdx].quantity + qty,
+        unitCost: cost,
+      };
       setItems(updated);
     } else {
       setItems([
@@ -63,20 +99,9 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
     setItems(items.filter((_, idx) => idx !== index));
   };
 
-  const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unitCost, 0);
-
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    if (!supplierId) {
-      showToast('Please select a supplier', 'warning');
-      return;
-    }
-
-    if (!items.length) {
-      showToast('Please add at least one product to this purchase order', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsSubmitting(true);
@@ -89,199 +114,204 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
       });
 
       if (res.success) {
-        showToast('Purchase order created (Status: PENDING)', 'success');
+        showToast('Purchase order created. Confirm it when the goods arrive.', 'success');
+        setItems([]);
+        setNotes('');
+        setAmountPaid('0');
         if (onSuccess) onSuccess();
         onClose();
       } else {
         showToast(res.error || 'Failed to create purchase', 'error');
       }
     } catch {
-      showToast('Error creating purchase order', 'error');
+      showToast('Could not create the purchase order. Try again.', 'error');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const balance = Math.max(0, subtotal - (parseFloat(amountPaid) || 0));
+  const itemsError = v.errorFor('items');
+
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Create Stock Purchase Order"
-      subtitle="Record incoming goods from suppliers"
-      maxWidth="max-w-2xl"
+      title="New purchase order"
+      subtitle="Record goods coming in from a supplier."
+      maxWidth="max-w-3xl"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button type="submit" form="purchase-form" variant="primary" isLoading={isSubmitting} icon={Boxes}>
+            Create purchase order
+          </Button>
+        </>
+      }
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Supplier Selector */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <form id="purchase-form" ref={v.formRef} onSubmit={handleSubmit} noValidate className="space-y-5">
+        <FormErrorSummary validation={v} />
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Select
             label="Supplier *"
             options={suppliers.map((s) => ({ value: s.supplierId, label: s.name }))}
+            placeholder={suppliers.length ? 'Select a supplier' : 'No suppliers yet. Add one first.'}
             value={supplierId}
             onChange={(e) => setSupplierId(e.target.value)}
-            required
+            {...v.field('supplierId')}
           />
 
           <Input
-            label="Order Notes / Delivery Note #"
+            label="Notes or delivery challan #"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="e.g. Delivery challan # 4492"
+            placeholder="e.g. Challan #4492"
+            optional
           />
         </div>
 
-        {/* Add Products Line Item Section */}
-        <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
-          <p className="text-xs font-bold uppercase tracking-wider text-slate-700">
-            Add Products to Purchase Order
-          </p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-            <div className="sm:col-span-2">
-              <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                Select Product
-              </label>
-              <select
+        {/* Line items */}
+        <div className="rounded-2xl border border-slate-200 overflow-hidden" data-field="items">
+          <div className="p-4 bg-slate-50 border-b border-slate-200">
+            <p className="text-[13px] font-semibold text-slate-900 mb-3">Add products</p>
+            <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-start">
+              <Select
+                label="Product"
                 value={selectedProductId}
                 onChange={(e) => {
                   setSelectedProductId(e.target.value);
+                  setLineErrors((prev) => ({ ...prev, selectedProductId: '' }));
                   const p = products.find((prod) => prod.productId === e.target.value);
                   if (p) setUnitCost(String(p.costPrice));
                 }}
-                className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl"
+                error={lineErrors.selectedProductId}
               >
                 {products.map((p) => (
                   <option key={p.productId} value={p.productId}>
                     {p.name} ({p.unit})
                   </option>
                 ))}
-              </select>
-            </div>
+              </Select>
 
-            <div>
               <Input
                 label="Quantity"
                 type="number"
+                inputMode="decimal"
                 min="1"
                 value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
+                onChange={(e) => {
+                  setQuantity(e.target.value);
+                  setLineErrors((prev) => ({ ...prev, quantity: '' }));
+                }}
+                className="tabular"
+                error={lineErrors.quantity}
               />
-            </div>
 
-            <div>
               <Input
-                label={`Cost Price (${currencySymbol})`}
+                label="Unit cost"
                 type="number"
+                inputMode="decimal"
                 step="any"
                 value={unitCost}
-                onChange={(e) => setUnitCost(e.target.value)}
-                placeholder="Unit Cost"
+                onChange={(e) => {
+                  setUnitCost(e.target.value);
+                  setLineErrors((prev) => ({ ...prev, unitCost: '' }));
+                }}
+                placeholder={String(products.find((p) => p.productId === selectedProductId)?.costPrice ?? '0')}
+                suffix={currencySymbol}
+                className="tabular"
+                error={lineErrors.unitCost}
               />
+
+              <div className="flex flex-col gap-1.5">
+                <span className="hidden sm:block min-h-5" />
+                <Button variant="secondary" icon={Plus} onClick={handleAddItem}>
+                  Add
+                </Button>
+              </div>
             </div>
           </div>
 
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              icon={Plus}
-              onClick={handleAddItem}
-              className="bg-white border border-slate-200 text-xs font-bold"
-            >
-              Add Item to Order
-            </Button>
+          <div className="max-h-56 overflow-y-auto">
+            {items.length === 0 ? (
+              <div className={`py-8 px-4 text-center ${itemsError ? 'bg-rose-50/60' : ''}`}>
+                <PackageOpen className={`w-6 h-6 mx-auto mb-2 ${itemsError ? 'text-rose-400' : 'text-slate-300'}`} strokeWidth={1.6} />
+                <p className="text-[13px] text-slate-500">No products added yet.</p>
+                <div className="flex justify-center mt-2">
+                  <FieldMessage error={itemsError} />
+                </div>
+              </div>
+            ) : (
+              <table className="w-full text-[13px] text-left">
+                <thead className="bg-white text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-2 text-xs font-medium">Item</th>
+                    <th className="px-4 py-2 text-xs font-medium text-right">Qty</th>
+                    <th className="px-4 py-2 text-xs font-medium text-right">Unit cost</th>
+                    <th className="px-4 py-2 text-xs font-medium text-right">Total</th>
+                    <th className="px-2 py-2 w-10"><span className="sr-only">Remove</span></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {items.map((it, idx) => (
+                    <tr key={it.productId} className="hover:bg-slate-50 animate-in fade-in slide-in-from-top-1">
+                      <td className="px-4 py-2.5 font-medium text-slate-900">{it.productName}</td>
+                      <td className="px-4 py-2.5 text-right tabular">
+                        {it.quantity} <span className="text-slate-400">{it.unit}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular">{formatCurrency(it.unitCost, currencySymbol)}</td>
+                      <td className="px-4 py-2.5 text-right tabular font-semibold text-slate-900">
+                        {formatCurrency(it.quantity * it.unitCost, currencySymbol)}
+                      </td>
+                      <td className="px-2 py-2.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveItem(idx)}
+                          aria-label={`Remove ${it.productName}`}
+                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded-lg transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 
-        {/* Added Items Table */}
-        <div className="border border-slate-200 rounded-xl overflow-hidden max-h-48 overflow-y-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
-              <tr>
-                <th className="p-2.5">Item</th>
-                <th className="p-2.5 text-center">Qty</th>
-                <th className="p-2.5 text-right">Cost Price</th>
-                <th className="p-2.5 text-right">Line Total</th>
-                <th className="p-2.5 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {items.map((it, idx) => (
-                <tr key={idx} className="hover:bg-slate-50">
-                  <td className="p-2.5 font-bold text-slate-800">{it.productName}</td>
-                  <td className="p-2.5 text-center">
-                    {it.quantity} {it.unit}
-                  </td>
-                  <td className="p-2.5 text-right font-mono">
-                    {formatCurrency(it.unitCost, currencySymbol)}
-                  </td>
-                  <td className="p-2.5 text-right font-mono font-bold text-slate-900">
-                    {formatCurrency(it.quantity * it.unitCost, currencySymbol)}
-                  </td>
-                  <td className="p-2.5 text-center">
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveItem(idx)}
-                      className="text-slate-400 hover:text-rose-600 p-1"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="p-4 text-center text-slate-400 text-xs">
-                    No products added to this purchase order yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Totals & Payments */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
           <Input
-            label={`Amount Paid Now (${currencySymbol})`}
+            label="Amount paid now"
             type="number"
+            inputMode="decimal"
             step="any"
+            min="0"
             value={amountPaid}
             onChange={(e) => setAmountPaid(e.target.value)}
             placeholder="0.00"
+            suffix={currencySymbol}
+            className="tabular"
+            hint="Leave 0 if the whole amount is on credit."
+            {...v.field('amountPaid')}
           />
 
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex flex-col justify-between text-xs">
-            <div className="flex justify-between font-semibold">
-              <span className="text-slate-600">Total Purchase:</span>
-              <span className="text-slate-900 font-bold">
-                {formatCurrency(subtotal, currencySymbol)}
-              </span>
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-[13px] space-y-2">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Order total</span>
+              <span className="text-slate-900 font-semibold tabular">{formatCurrency(subtotal, currencySymbol)}</span>
             </div>
-            <div className="flex justify-between font-bold pt-1 border-t border-slate-200">
-              <span className="text-slate-600">Balance on Credit:</span>
-              <span className="text-amber-800">
-                {formatCurrency(Math.max(0, subtotal - (parseFloat(amountPaid) || 0)), currencySymbol)}
+            <div className="flex justify-between pt-2 border-t border-slate-200">
+              <span className="text-slate-500">Balance on credit</span>
+              <span className={`font-semibold tabular ${balance > 0 ? 'text-amber-700' : 'text-slate-900'}`}>
+                {formatCurrency(balance, currencySymbol)}
               </span>
             </div>
           </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            size="sm"
-            isLoading={isSubmitting}
-            icon={Boxes}
-            className="font-bold"
-          >
-            Create Purchase Order
-          </Button>
         </div>
       </form>
     </Modal>

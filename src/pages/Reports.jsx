@@ -5,20 +5,9 @@ import { formatCurrency } from '../utils/formatters';
 import { exportToCsv } from '../utils/exportCsv';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
-import { Input } from '../components/common/Input';
 import { Table } from '../components/common/Table';
 import {
-  TrendingUp,
-  DollarSign,
   Download,
-  Calendar,
-  Wallet,
-  Package,
-  PieChart as PieIcon,
-  BarChart3,
-  Layers,
-  ArrowUpRight,
-  ArrowDownRight
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -27,11 +16,10 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  Legend,
   CartesianGrid,
   PieChart,
   Pie,
-  Cell
+  Cell,
 } from 'recharts';
 
 const PIE_COLORS = ['#059669', '#0284c7', '#d97706', '#9333ea', '#e11d48', '#64748b'];
@@ -121,7 +109,7 @@ export function Reports() {
     {
       header: 'Product Name',
       key: 'name',
-      render: (row) => <span className="font-bold text-slate-800">{row.name}</span>,
+      render: (row) => <span className="font-semibold text-slate-800">{row.name}</span>,
     },
     {
       header: 'Units Sold',
@@ -132,7 +120,7 @@ export function Reports() {
       header: 'Revenue Generated',
       key: 'revenue',
       render: (row) => (
-        <span className="font-mono font-bold text-slate-900">
+        <span className="font-mono font-semibold text-slate-900">
           {formatCurrency(row.revenue, currencySymbol)}
         </span>
       ),
@@ -141,7 +129,7 @@ export function Reports() {
       header: 'Gross Profit Generated',
       key: 'profit',
       render: (row) => (
-        <span className="font-mono font-bold text-emerald-700">
+        <span className="font-mono font-semibold text-emerald-700">
           {formatCurrency(row.profit, currencySymbol)}
         </span>
       ),
@@ -151,13 +139,13 @@ export function Reports() {
   return (
     <div className="space-y-6">
       {/* Header & Date Range Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 bg-white rounded-2xl border border-slate-200 shadow-xs">
         <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">
-            Financial Analytics & Profit Reports
+          <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">
+            Reports & profit
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Accurate profit and loss calculations using cost price snapshots from Google Sheets.
+          <p className="text-sm text-slate-500 mt-0.5">
+            Profit and loss based on the cost price at the time of each sale.
           </p>
         </div>
 
@@ -167,21 +155,21 @@ export function Reports() {
             <button
               type="button"
               onClick={() => handleQuickPreset(0)}
-              className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"
+              className="h-8 px-3 text-[13px] font-medium rounded-lg border border-slate-200 bg-white hover:border-slate-300 text-slate-700 transition-colors"
             >
               Today
             </button>
             <button
               type="button"
               onClick={() => handleQuickPreset(7)}
-              className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"
+              className="h-8 px-3 text-[13px] font-medium rounded-lg border border-slate-200 bg-white hover:border-slate-300 text-slate-700 transition-colors"
             >
               Last 7 Days
             </button>
             <button
               type="button"
               onClick={() => handleQuickPreset(30)}
-              className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"
+              className="h-8 px-3 text-[13px] font-medium rounded-lg border border-slate-200 bg-white hover:border-slate-300 text-slate-700 transition-colors"
             >
               Last 30 Days
             </button>
@@ -205,7 +193,7 @@ export function Reports() {
               variant="secondary"
               size="sm"
               onClick={() => loadReports(startDate, endDate)}
-              className="text-xs py-1.5 px-3 font-bold"
+              className="text-xs py-1.5 px-3 font-semibold"
             >
               Apply
             </Button>
@@ -226,51 +214,51 @@ export function Reports() {
       {/* KPI Cards: Revenue, COGS, Gross Profit, Expenses, Net Profit */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
         <Card className="border-slate-200">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+          <p className="text-xs font-semibold text-slate-500">
             Total Sales Revenue
           </p>
-          <p className="text-xl font-black text-slate-900 mt-1">
+          <p className="text-xl font-semibold text-slate-900 mt-1">
             {formatCurrency(reportData?.totalSalesRevenue || 0, currencySymbol)}
           </p>
-          <p className="text-[10px] text-slate-400 mt-0.5">Completed counter sales</p>
+          <p className="text-xs text-slate-400 mt-0.5">Completed counter sales</p>
         </Card>
 
         <Card className="border-slate-200">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+          <p className="text-xs font-semibold text-slate-500">
             Cost of Goods (COGS)
           </p>
-          <p className="text-xl font-black text-slate-700 mt-1">
+          <p className="text-xl font-semibold text-slate-700 mt-1">
             {formatCurrency(reportData?.totalCOGS || 0, currencySymbol)}
           </p>
-          <p className="text-[10px] text-slate-400 mt-0.5">Snapshot wholesale cost</p>
+          <p className="text-xs text-slate-400 mt-0.5">Snapshot wholesale cost</p>
         </Card>
 
         <Card className="border-emerald-200 bg-emerald-50/30">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+          <p className="text-xs font-semibold text-emerald-800">
             Gross Profit
           </p>
-          <p className="text-xl font-black text-emerald-950 mt-1">
+          <p className="text-xl font-semibold text-emerald-950 mt-1">
             {formatCurrency(reportData?.grossProfit || 0, currencySymbol)}
           </p>
-          <p className="text-[10px] text-emerald-700 mt-0.5">Revenue minus COGS</p>
+          <p className="text-xs text-emerald-700 mt-0.5">Revenue minus COGS</p>
         </Card>
 
         <Card className="border-amber-200 bg-amber-50/30">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">
+          <p className="text-xs font-semibold text-amber-800">
             Operating Expenses
           </p>
-          <p className="text-xl font-black text-amber-950 mt-1">
+          <p className="text-xl font-semibold text-amber-950 mt-1">
             {formatCurrency(reportData?.totalExpenses || 0, currencySymbol)}
           </p>
-          <p className="text-[10px] text-amber-700 mt-0.5">Rent, utility bills, salaries</p>
+          <p className="text-xs text-amber-700 mt-0.5">Rent, utility bills, salaries</p>
         </Card>
 
         <Card className="border-indigo-200 bg-indigo-50/40">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-900">
+          <p className="text-xs font-semibold text-indigo-900">
             Estimated Net Profit
           </p>
           <p
-            className={`text-xl font-black mt-1 ${
+            className={`text-xl font-semibold mt-1 ${
               (reportData?.estimatedNetProfit || 0) >= 0
                 ? 'text-indigo-950'
                 : 'text-rose-700'
@@ -278,14 +266,14 @@ export function Reports() {
           >
             {formatCurrency(reportData?.estimatedNetProfit || 0, currencySymbol)}
           </p>
-          <p className="text-[10px] text-indigo-700 mt-0.5">Gross profit minus expenses</p>
+          <p className="text-xs text-indigo-700 mt-0.5">Gross profit minus expenses</p>
         </Card>
       </div>
 
       {/* Inventory Stock Valuation Banner */}
       <div className="p-4 bg-slate-900 text-white rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+          <span className="text-xs font-semibold text-emerald-400">
             Store Inventory Health & Valuation
           </span>
           <p className="text-sm font-semibold text-slate-300 mt-0.5">
@@ -295,13 +283,13 @@ export function Reports() {
         <div className="flex items-center gap-6 text-right">
           <div>
             <p className="text-xs text-slate-400">Total Stock Cost Value</p>
-            <p className="text-lg font-black text-white font-mono">
+            <p className="text-lg font-semibold text-white font-mono">
               {formatCurrency(reportData?.inventoryValuation?.costValue || 0, currencySymbol)}
             </p>
           </div>
           <div className="pl-6 border-l border-slate-700">
             <p className="text-xs text-emerald-400">Total Stock Retail Value</p>
-            <p className="text-lg font-black text-emerald-400 font-mono">
+            <p className="text-lg font-semibold text-emerald-400 font-mono">
               {formatCurrency(reportData?.inventoryValuation?.retailValue || 0, currencySymbol)}
             </p>
           </div>

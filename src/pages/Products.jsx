@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
 import { api } from '../services/api';
 import { formatCurrency } from '../utils/formatters';
 import { exportToCsv } from '../utils/exportCsv';
@@ -10,21 +11,16 @@ import { Pagination } from '../components/common/Pagination';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { SearchInput } from '../components/common/SearchInput';
+import { PageHeader } from '../components/common/Card';
 import { ProductModal } from '../components/inventory/ProductModal';
 import { StockAdjustModal } from '../components/inventory/StockAdjustModal';
 import {
-  Package,
   Plus,
   Download,
   Edit,
   ArrowLeftRight,
-  AlertTriangle,
   Barcode,
-  Layers,
   Trash2,
-  CheckCircle2,
-  PlusCircle,
-  MinusCircle
 } from 'lucide-react';
 
 export function Products() {
@@ -37,6 +33,7 @@ export function Products() {
     quickAdjustStock,
   } = useStore();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [search, setSearch] = useState('');
@@ -105,10 +102,10 @@ export function Products() {
   const handleToggleDeactivate = async (prod) => {
     const isAct = prod.status !== 'INACTIVE';
     const confirmMsg = isAct
-      ? `Deactivate "${prod.name}"? It will be hidden from the POS register.`
-      : `Re-activate "${prod.name}"?`;
+      ? 'It will be hidden from the POS register until you re-activate it.'
+      : 'It will show up in the POS register again.';
 
-    if (!window.confirm(confirmMsg)) return;
+    if (!(await confirm({ title: isAct ? `Deactivate "${prod.name}"?` : `Re-activate "${prod.name}"?`, message: confirmMsg, confirmText: isAct ? 'Deactivate' : 'Re-activate', tone: isAct ? 'warning' : 'info' }))) return;
 
     try {
       if (isAct) {
@@ -125,20 +122,20 @@ export function Products() {
   };
 
   const handleDeletePermanent = async (prod) => {
-    if (!window.confirm(`Permanently delete "${prod.name}" from Google Sheet database? This cannot be undone.`)) {
+    if (!(await confirm({ title: `Delete "${prod.name}"?`, message: 'The product is removed permanently. Past sales keep their records. This cannot be undone.', confirmText: 'Delete product', tone: 'danger' }))) {
       return;
     }
     try {
       showToast(`Deleting "${prod.name}"...`, 'info');
       await deleteProductOptimistic(prod.productId, true);
-      showToast('Product deleted from Google Sheet', 'success');
+      showToast(`"${prod.name}" deleted`, 'success');
     } catch {
       showToast('Failed to delete product', 'error');
     }
   };
 
-  const handleClearDummyData = () => {
-    if (!window.confirm('Remove all dummy items? You will start with an empty catalog ready for your Google Sheet.')) {
+  const handleClearDummyData = async () => {
+    if (!(await confirm({ title: 'Remove all sample products?', message: 'You will start with an empty catalog. This cannot be undone.', confirmText: 'Remove samples', tone: 'danger' }))) {
       return;
     }
     api.clearAllDummyData();
@@ -163,23 +160,23 @@ export function Products() {
     exportToCsv('Grocery_Inventory_Catalog', headers, filteredProducts);
   };
 
+  const stepBtn =
+    'h-6 min-w-7 px-1.5 text-xs font-medium tabular rounded-md border border-slate-200 bg-white text-slate-600 transition-colors';
+
   const columns = [
     {
-      header: 'Product Name & SKU',
+      header: 'Product',
       key: 'name',
       render: (row) => (
         <div className="min-w-[200px]">
-          <div className="font-bold text-slate-900 leading-snug">{row.name}</div>
+          <div className="font-medium text-slate-900 leading-snug">{row.name}</div>
           <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500 font-mono">
             <span>{row.sku}</span>
             {row.barcode && (
-              <>
-                <span>•</span>
-                <span className="flex items-center gap-1">
-                  <Barcode className="w-3 h-3 text-slate-400" />
-                  {row.barcode}
-                </span>
-              </>
+              <span className="flex items-center gap-1">
+                <Barcode className="w-3 h-3 text-slate-400" />
+                {row.barcode}
+              </span>
             )}
           </div>
         </div>
@@ -188,83 +185,70 @@ export function Products() {
     {
       header: 'Category',
       key: 'categoryName',
-      render: (row) => (
-        <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700">
-          {row.categoryName || 'General'}
-        </span>
-      ),
+      render: (row) => <span className="text-[13px] text-slate-600">{row.categoryName || 'General'}</span>,
     },
     {
-      header: 'Cost Price',
+      header: 'Cost',
       key: 'costPrice',
+      headerClassName: 'text-right',
+      className: 'text-right',
       render: (row) => (
-        <span className="text-xs text-slate-600 font-medium">
-          {formatCurrency(row.costPrice, currencySymbol)}
-        </span>
+        <span className="text-[13px] text-slate-500 tabular">{formatCurrency(row.costPrice, currencySymbol)}</span>
       ),
     },
     {
-      header: 'Selling Price',
+      header: 'Price',
       key: 'sellingPrice',
+      headerClassName: 'text-right',
+      className: 'text-right',
       render: (row) => (
-        <div>
-          <span className="font-bold text-slate-900">
-            {formatCurrency(row.sellingPrice, currencySymbol)}
-          </span>
-          <span className="text-[10px] text-slate-400 ml-1">/ {row.unit}</span>
+        <div className="tabular">
+          <span className="font-semibold text-slate-900">{formatCurrency(row.sellingPrice, currencySymbol)}</span>
+          <span className="text-xs text-slate-400 ml-1">/ {row.unit}</span>
         </div>
       ),
     },
     {
-      header: 'Stock on Hand',
+      header: 'Stock',
       key: 'currentStock',
       render: (row) => {
         const stock = Number(row.currentStock) || 0;
         const minStock = Number(row.minimumStock) || 0;
+        const variant = stock <= 0 ? 'danger' : stock <= minStock ? 'warning' : 'success';
+        const label = stock <= 0 ? 'Out of stock' : `${stock} ${row.unit}${stock <= minStock ? ' · low' : ''}`;
 
         return (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5">
-              {stock <= 0 ? (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black bg-rose-100 text-rose-800 border border-rose-200">
-                  🔴 Out of Stock ({stock})
-                </span>
-              ) : stock <= minStock ? (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-900 border border-amber-200">
-                  ⚠️ Low: {stock} {row.unit}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-900 border border-emerald-200">
-                  📦 {stock} {row.unit}
-                </span>
-              )}
-            </div>
-
-            {/* Quick 1-Click Stepper Buttons directly on table */}
-            <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <Badge variant={variant} size="xs" className="tabular min-w-[92px]">
+              {label}
+            </Badge>
+            <div className="flex items-center gap-1 opacity-60 hover:opacity-100 focus-within:opacity-100 transition-opacity">
+              <button
+                type="button"
+                onClick={() => quickAdjustStock(row.productId, -1)}
+                className={`${stepBtn} hover:border-rose-300 hover:text-rose-700`}
+                title="Remove 1 from stock"
+                aria-label={`Remove 1 ${row.name}`}
+              >
+                −1
+              </button>
               <button
                 type="button"
                 onClick={() => quickAdjustStock(row.productId, 1)}
-                className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-700 rounded transition-colors"
-                title="Quick add +1 to stock"
+                className={`${stepBtn} hover:border-brand-300 hover:text-brand-700`}
+                title="Add 1 to stock"
+                aria-label={`Add 1 ${row.name}`}
               >
                 +1
               </button>
               <button
                 type="button"
                 onClick={() => quickAdjustStock(row.productId, 5)}
-                className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-700 rounded transition-colors"
-                title="Quick add +5 to stock"
+                className={`${stepBtn} hover:border-brand-300 hover:text-brand-700`}
+                title="Add 5 to stock"
+                aria-label={`Add 5 ${row.name}`}
               >
                 +5
-              </button>
-              <button
-                type="button"
-                onClick={() => quickAdjustStock(row.productId, -1)}
-                className="px-1.5 py-0.5 text-[10px] font-bold bg-slate-100 hover:bg-rose-100 hover:text-rose-800 text-slate-700 rounded transition-colors"
-                title="Quick subtract -1 from stock"
-              >
-                -1
               </button>
             </div>
           </div>
@@ -281,35 +265,34 @@ export function Products() {
       ),
     },
     {
-      header: 'Actions',
+      header: <span className="sr-only">Actions</span>,
       key: 'actions',
       className: 'text-right',
       render: (row) => (
-        <div className="flex items-center justify-end gap-1.5">
+        <div className="flex items-center justify-end gap-1">
           <Button
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={() => handleOpenAdjust(row)}
             icon={ArrowLeftRight}
-            title="Adjust inventory stock audit"
-            className="px-2 py-1 text-xs"
+            title="Adjust stock"
           >
-            Audit
+            Adjust
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             onClick={() => handleOpenEdit(row)}
             icon={Edit}
             title="Edit product"
-            className="px-2 py-1 text-xs"
+            aria-label={`Edit ${row.name}`}
+            className="w-[30px] px-0"
           />
           <Button
             variant="ghost"
             size="sm"
             onClick={() => handleToggleDeactivate(row)}
-            title={row.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
-            className="text-slate-400 hover:text-slate-700 px-2 py-1 text-xs"
+            title={row.status === 'ACTIVE' ? 'Hide from POS' : 'Show in POS again'}
           >
             {row.status === 'ACTIVE' ? 'Deactivate' : 'Restore'}
           </Button>
@@ -318,81 +301,70 @@ export function Products() {
             size="sm"
             onClick={() => handleDeletePermanent(row)}
             icon={Trash2}
-            title="Permanently delete from Google Sheet"
-            className="text-slate-400 hover:text-rose-600 px-1.5 py-1 text-xs"
+            title="Delete product"
+            aria-label={`Delete ${row.name}`}
+            className="w-[30px] px-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
           />
         </div>
       ),
     },
   ];
 
+  const filterSelect =
+    'h-[38px] pl-3 pr-9 text-[13px] bg-white border border-slate-300 rounded-xl text-slate-700 hover:border-slate-400 focus:outline-none focus:border-brand-600 focus:ring-[3px] focus:ring-brand-600/20 appearance-none cursor-pointer ' +
+    "bg-[url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%236e7370' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E\")] bg-no-repeat bg-[position:right_10px_center]";
+
+  const hasFilters = search || categoryFilter !== 'ALL' || stockFilter !== 'ALL';
+
   return (
-    <div className="space-y-4">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">
-            Product & Inventory Catalog
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Manage your store's products, barcode tags, selling prices, and stock counts.
-          </p>
-        </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="Products"
+        description={`${products.length} items in your catalog`}
+        actions={
+          <>
+            <Button
+              variant="ghost"
+              icon={Trash2}
+              onClick={handleClearDummyData}
+              className="text-slate-500 hover:text-rose-700 hover:bg-rose-50"
+              title="Remove all sample products"
+            >
+              Clear samples
+            </Button>
+            <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
+              Export
+            </Button>
+            <Button variant="primary" icon={Plus} onClick={handleOpenAdd}>
+              Add product
+            </Button>
+          </>
+        }
+      />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="outline"
-            size="md"
-            icon={Trash2}
-            onClick={handleClearDummyData}
-            className="text-rose-700 hover:bg-rose-50 border-rose-200 text-xs font-semibold"
-            title="Remove all sample products to start with empty catalog"
-          >
-            Clear Dummy Data
-          </Button>
-          <Button
-            variant="outline"
-            size="md"
-            icon={Download}
-            onClick={handleExportCsv}
-          >
-            Export CSV
-          </Button>
-          <Button
-            variant="primary"
-            size="md"
-            icon={Plus}
-            onClick={handleOpenAdd}
-            className="font-bold shadow-sm"
-          >
-            Add Product
-          </Button>
-        </div>
-      </div>
-
-      {/* Filter and Search Bar */}
-      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col md:flex-row items-center gap-3">
+      {/* Filters */}
+      <div className="flex flex-col md:flex-row md:items-center gap-2">
         <SearchInput
           value={search}
           onChange={(val) => {
             setSearch(val);
             setCurrentPage(1);
           }}
-          placeholder="Search product by title, SKU or barcode..."
-          className="flex-1 w-full"
+          placeholder="Search by name, SKU or barcode"
+          className="flex-1 w-full md:max-w-md"
         />
 
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          {/* Category Filter */}
+        <div className="flex items-center gap-2">
           <select
             value={categoryFilter}
             onChange={(e) => {
               setCategoryFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            aria-label="Filter by category"
+            className={filterSelect}
           >
-            <option value="ALL">All Categories</option>
+            <option value="ALL">All categories</option>
             {categories.map((c) => (
               <option key={c.categoryId} value={c.categoryId}>
                 {c.name}
@@ -400,30 +372,46 @@ export function Products() {
             ))}
           </select>
 
-          {/* Stock Filter */}
           <select
             value={stockFilter}
             onChange={(e) => {
               setStockFilter(e.target.value);
               setCurrentPage(1);
             }}
-            className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            aria-label="Filter by stock level"
+            className={filterSelect}
           >
-            <option value="ALL">All Stock Levels</option>
-            <option value="LOW_STOCK">Low Stock Only</option>
-            <option value="OUT_OF_STOCK">Out of Stock</option>
-            <option value="IN_STOCK">In Stock</option>
+            <option value="ALL">All stock levels</option>
+            <option value="LOW_STOCK">Low stock</option>
+            <option value="OUT_OF_STOCK">Out of stock</option>
+            <option value="IN_STOCK">In stock</option>
           </select>
+
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSearch('');
+                setCategoryFilter('ALL');
+                setStockFilter('ALL');
+                setCurrentPage(1);
+              }}
+            >
+              Clear
+            </Button>
+          )}
         </div>
       </div>
 
       {/* Products Table Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
           data={paginatedProducts}
           keyField="productId"
-          emptyMessage="No products match your filter criteria."
+          emptyMessage={hasFilters ? 'No products match these filters' : 'No products yet'}
+          emptyDescription={hasFilters ? 'Try a different search or clear the filters.' : 'Add your first product to start selling.'}
+          emptyAction={!hasFilters && <Button size="sm" icon={Plus} onClick={handleOpenAdd}>Add product</Button>}
         />
 
         <Pagination

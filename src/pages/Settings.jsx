@@ -1,29 +1,28 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
 import { api } from '../services/api';
 import { Card } from '../components/common/Card';
+import { FormErrorSummary } from '../components/common/FormErrorSummary';
+import { useFormValidation, rules } from '../hooks/useFormValidation';
 import { Button } from '../components/common/Button';
 import { Input, Select } from '../components/common/Input';
-import { Badge } from '../components/common/Badge';
 import {
-  Settings as SettingsIcon,
   Database,
   Save,
   CheckCircle2,
   AlertCircle,
-  ExternalLink,
-  Copy,
   RotateCcw,
   Store,
-  Printer,
   ShieldCheck,
-  Server
+  Server,
 } from 'lucide-react';
 
 export function Settings() {
   const { settings, isLiveBackend, refreshAllData } = useStore();
   const { showToast } = useToast();
+  const confirm = useConfirm();
 
   const [activeTab, setActiveTab] = useState('general'); // 'general', 'database', 'instructions'
 
@@ -48,13 +47,47 @@ export function Settings() {
   const [testResult, setTestResult] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  const v = useFormValidation(formData, {
+    storeName: (val) => {
+      const t = val.trim();
+      if (!t) return 'Store name is required';
+      return t.length > 60 ? 'Keep the store name under 60 characters' : '';
+    },
+    phone: rules.phone,
+    currencySymbol: (val) => (!val.trim() ? 'Currency symbol is required' : ''),
+    taxRate: (val) => {
+      if (String(val).trim() === '') return 'Enter 0 if you do not charge tax';
+      const n = Number(val);
+      if (Number.isNaN(n)) return 'Numbers only';
+      return n < 0 || n > 100 ? 'Tax rate must be between 0 and 100' : '';
+    },
+    lowStockDefaultThreshold: (val) =>
+      String(val).trim() === '' || /^\d+$/.test(String(val).trim()) ? '' : 'Enter a whole number, 0 or more',
+    receiptFooter: (val) => (val.length > 120 ? 'Keep the footer under 120 characters' : ''),
+  });
+
+  const urlV = useFormValidation(
+    { appsScriptUrl },
+    {
+      appsScriptUrl: (val) => {
+        if (!val.trim()) return 'Paste your Apps Script web app URL';
+        const urlError = rules.url(val);
+        if (urlError) return urlError;
+        return /script\.google(usercontent)?\.com/.test(val) && /\/exec\/?$/.test(val.trim())
+          ? ''
+          : 'Use the web app URL from script.google.com. It ends with /exec';
+      },
+    }
+  );
+
   const handleSaveGeneral = async (e) => {
     e.preventDefault();
+    if (!v.validate()) return;
     try {
       setIsSaving(true);
       const res = await api.saveSettings(formData);
       if (res.success) {
-        showToast('Store settings saved successfully', 'success');
+        showToast('Store settings saved', 'success');
         await refreshAllData();
       } else {
         showToast(res.error || 'Failed to save settings', 'error');
@@ -67,10 +100,7 @@ export function Settings() {
   };
 
   const handleTestConnection = async () => {
-    if (!appsScriptUrl.trim()) {
-      showToast('Please enter a Google Apps Script Web App URL first', 'warning');
-      return;
-    }
+    if (!urlV.validate()) return;
 
     try {
       setIsTesting(true);
@@ -91,6 +121,7 @@ export function Settings() {
   };
 
   const handleApplyAppsScriptUrl = async () => {
+    if (!urlV.validate()) return;
     api.setEndpointUrl(appsScriptUrl.trim());
     showToast('Apps Script endpoint updated', 'success');
     await refreshAllData();
@@ -103,20 +134,20 @@ export function Settings() {
   };
 
   const handleSwitchToLive = () => {
-    if (!appsScriptUrl.trim()) {
-      showToast('Please enter an Apps Script URL first', 'warning');
-      return;
-    }
+    if (!urlV.validate()) return;
     api.setForceLocal(false);
-    showToast('Switched to Live Google Sheets Backend', 'success');
+    showToast('Switched to the live database', 'success');
     refreshAllData();
   };
 
-  const handleResetDemoData = () => {
+  const handleResetDemoData = async () => {
     if (
-      !window.confirm(
-        'Reset local demo database to initial sample grocery products, suppliers, and customers?'
-      )
+      !(await confirm({
+        title: 'Reset the demo database?',
+        message: 'Local data is replaced with the original sample products, suppliers and customers.',
+        confirmText: 'Reset demo data',
+        tone: 'danger',
+      }))
     ) {
       return;
     }
@@ -129,38 +160,42 @@ export function Settings() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-black text-slate-900 tracking-tight">Settings & Database</h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Configure store details, tax rates, receipt formatting, and manage Google Sheets backend integration.
+        <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">Settings</h2>
+        <p className="text-sm text-slate-500 mt-0.5">
+          Store details, tax, receipts and your database connection.
         </p>
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-slate-200">
+      <div className="flex items-center gap-1 border-b border-slate-200 overflow-x-auto no-scrollbar" role="tablist">
         <button
           type="button"
           onClick={() => setActiveTab('general')}
-          className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-2 ${
+          role="tab"
+          aria-selected={activeTab === 'general'}
+          className={`-mb-px h-10 px-3 text-[13px] font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
             activeTab === 'general'
-              ? 'border-emerald-600 text-emerald-800'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
+              ? 'border-brand-600 text-slate-900'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
           }`}
         >
           <Store className="w-4 h-4" />
-          Store Profile & POS Settings
+          Store & POS
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('database')}
-          className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-2 ${
+          role="tab"
+          aria-selected={activeTab === 'database'}
+          className={`-mb-px h-10 px-3 text-[13px] font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
             activeTab === 'database'
-              ? 'border-emerald-600 text-emerald-800'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
+              ? 'border-brand-600 text-slate-900'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
           }`}
         >
           <Database className="w-4 h-4" />
-          Google Sheets Integration
+          Database
           <span
             className={`w-2 h-2 rounded-full ${
               isLiveBackend ? 'bg-emerald-500' : 'bg-amber-500'
@@ -171,44 +206,54 @@ export function Settings() {
         <button
           type="button"
           onClick={() => setActiveTab('instructions')}
-          className={`px-4 py-2 text-xs font-bold transition-all border-b-2 flex items-center gap-2 ${
+          role="tab"
+          aria-selected={activeTab === 'instructions'}
+          className={`-mb-px h-10 px-3 text-[13px] font-medium transition-colors border-b-2 flex items-center gap-2 whitespace-nowrap ${
             activeTab === 'instructions'
-              ? 'border-emerald-600 text-emerald-800'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
+              ? 'border-brand-600 text-slate-900'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
           }`}
         >
           <Server className="w-4 h-4" />
-          Apps Script Setup Guide
+          Setup guide
         </button>
       </div>
 
       {/* TAB 1: General Settings */}
       {activeTab === 'general' && (
-        <form onSubmit={handleSaveGeneral} className="space-y-6 max-w-4xl">
+        <form ref={v.formRef} onSubmit={handleSaveGeneral} noValidate className="space-y-5 max-w-4xl">
+          <FormErrorSummary validation={v} />
           <Card title="Store Identity & Contact Information">
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
-                  label="Store Name *"
+                  label="Store name *"
                   value={formData.storeName}
                   onChange={(e) => setFormData({ ...formData, storeName: e.target.value })}
-                  required
+                  {...v.field('storeName')}
                 />
                 <Input
-                  label="Store Tagline / Subtitle"
+                  label="Tagline"
                   value={formData.tagline}
                   onChange={(e) => setFormData({ ...formData, tagline: e.target.value })}
+                  optional
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
-                  label="Contact Phone Number"
+                  label="Phone number"
+                  type="tel"
+                  inputMode="tel"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  className="tabular"
+                  hint="Printed on every receipt."
+                  {...v.field('phone')}
+                  isValid={false}
                 />
                 <Input
-                  label="Store Address"
+                  label="Address"
                   value={formData.address}
                   onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                 />
@@ -220,43 +265,55 @@ export function Settings() {
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <Input
-                  label="Currency Code"
+                  label="Currency code"
                   value={formData.currency}
                   onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
                   placeholder="PKR"
                 />
                 <Input
-                  label="Currency Symbol"
+                  label="Currency symbol *"
                   value={formData.currencySymbol}
                   onChange={(e) => setFormData({ ...formData, currencySymbol: e.target.value })}
                   placeholder="Rs."
+                  {...v.field('currencySymbol')}
+                  isValid={false}
                 />
                 <Input
-                  label="Sales Tax Rate (%)"
+                  label="Sales tax rate *"
                   type="number"
+                  inputMode="decimal"
                   step="any"
+                  min="0"
+                  max="100"
                   value={formData.taxRate}
                   onChange={(e) => setFormData({ ...formData, taxRate: e.target.value })}
                   placeholder="0"
+                  suffix="%"
+                  className="tabular"
+                  {...v.field('taxRate')}
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
-                  label="Default Low Stock Threshold"
+                  label="Default low-stock alert level"
                   type="number"
+                  inputMode="numeric"
+                  min="0"
                   value={formData.lowStockDefaultThreshold}
                   onChange={(e) =>
                     setFormData({ ...formData, lowStockDefaultThreshold: e.target.value })
                   }
                   placeholder="5"
+                  className="tabular"
+                  {...v.field('lowStockDefaultThreshold')}
                 />
 
                 <Select
-                  label="Allow Negative Stock Selling"
+                  label="Selling with zero stock"
                   options={[
-                    { value: 'false', label: 'Strict (Prevent checkout if out of stock)' },
-                    { value: 'true', label: 'Allow (Permit negative inventory counts)' },
+                    { value: 'false', label: 'Block (no sale when out of stock)' },
+                    { value: 'true', label: 'Allow (stock can go negative)' },
                   ]}
                   value={formData.allowNegativeStock}
                   onChange={(e) =>
@@ -271,28 +328,31 @@ export function Settings() {
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Select
-                  label="Default Printer Paper Format"
+                  label="Receipt paper"
                   options={[
-                    { value: 'thermal80', label: '80mm Thermal Receipt (Standard Retail)' },
-                    { value: 'thermal58', label: '58mm Thermal Receipt (Compact)' },
-                    { value: 'a4', label: 'Standard A4 Full Page Invoice' },
+                    { value: 'thermal80', label: '80mm thermal (standard)' },
+                    { value: 'thermal58', label: '58mm thermal (compact)' },
+                    { value: 'a4', label: 'A4 full-page invoice' },
                   ]}
                   value={formData.receiptType}
                   onChange={(e) => setFormData({ ...formData, receiptType: e.target.value })}
                 />
 
                 <Input
-                  label="Receipt Footer Thank You Message"
+                  label="Receipt footer"
                   value={formData.receiptFooter}
                   onChange={(e) => setFormData({ ...formData, receiptFooter: e.target.value })}
+                  hint={`${formData.receiptFooter.length}/120 characters`}
+                  {...v.field('receiptFooter')}
+                  isValid={false}
                 />
               </div>
             </div>
           </Card>
 
-          <div className="flex justify-end gap-3 pt-2">
-            <Button type="submit" variant="primary" size="md" isLoading={isSaving} icon={Save} className="font-bold">
-              Save Store Configuration
+          <div className="sticky bottom-0 -mx-1 px-1 py-3 flex justify-end gap-3 bg-[#f5f5f2]/90 backdrop-blur-sm border-t border-slate-200">
+            <Button type="submit" variant="primary" isLoading={isSaving} icon={Save}>
+              Save settings
             </Button>
           </div>
         </form>
@@ -303,7 +363,7 @@ export function Settings() {
         <div className="space-y-6 max-w-4xl">
           <Card title="Google Sheets Backend Connection">
             <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between">
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div
                     className={`w-3 h-3 rounded-full ${
@@ -311,10 +371,10 @@ export function Settings() {
                     }`}
                   />
                   <div>
-                    <h4 className="text-xs font-bold text-slate-800">
+                    <h4 className="text-xs font-semibold text-slate-800">
                       Active Backend Mode: {isLiveBackend ? 'Live Google Apps Script' : 'Local Demo Storage'}
                     </h4>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-xs text-slate-500">
                       {isLiveBackend
                         ? 'Requests write directly to your Google Spreadsheet.'
                         : 'Using high-speed local mock storage preloaded with grocery items.'}
@@ -337,11 +397,16 @@ export function Settings() {
 
               <div>
                 <Input
-                  label="Google Apps Script Web App Deployment URL"
+                  label="Apps Script web app URL"
                   value={appsScriptUrl}
-                  onChange={(e) => setAppsScriptUrl(e.target.value)}
+                  onChange={(e) => {
+                    setAppsScriptUrl(e.target.value);
+                    setTestResult(null);
+                  }}
                   placeholder="https://script.google.com/macros/s/AKfycby.../exec"
-                  hint="Get this from Google Apps Script > Deploy > Manage deployments > Web app URL"
+                  hint="Apps Script > Deploy > Manage deployments > Web app URL"
+                  className="font-mono text-[13px]"
+                  {...urlV.field('appsScriptUrl')}
                 />
               </div>
 
@@ -353,16 +418,15 @@ export function Settings() {
                   isLoading={isTesting}
                   icon={ShieldCheck}
                 >
-                  Test Connection
+                  Test connection
                 </Button>
                 <Button
                   variant="primary"
                   size="sm"
                   onClick={handleApplyAppsScriptUrl}
                   icon={Save}
-                  className="font-bold"
                 >
-                  Save & Connect Live URL
+                  Save and connect
                 </Button>
               </div>
 
@@ -380,7 +444,7 @@ export function Settings() {
                     <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   )}
                   <div>
-                    <p className="font-bold">
+                    <p className="font-semibold">
                       {testResult.success
                         ? 'Connected Successfully to Google Apps Script!'
                         : 'Connection Test Failed'}
@@ -397,21 +461,15 @@ export function Settings() {
           <Card title="Local Development Database Management">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-xs font-bold text-slate-800">
+                <h4 className="text-xs font-semibold text-slate-800">
                   Reset Local Sample Database
                 </h4>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Restores 28 sample Pakistani grocery items across 8 categories, demo suppliers, and test customers.
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                icon={RotateCcw}
-                onClick={handleResetDemoData}
-                className="text-xs text-rose-700 hover:bg-rose-50 border-rose-200"
-              >
-                Reset Demo Data
+              <Button variant="danger-soft" size="sm" icon={RotateCcw} onClick={handleResetDemoData} className="shrink-0">
+                Reset demo data
               </Button>
             </div>
           </Card>
@@ -420,7 +478,7 @@ export function Settings() {
 
       {/* TAB 3: Setup Guide */}
       {activeTab === 'instructions' && (
-        <div className="space-y-4 max-w-4xl text-xs text-slate-700">
+        <div className="space-y-4 max-w-4xl text-sm text-slate-700">
           <Card title="Google Sheets Setup & Deployment Instructions">
             <div className="space-y-4">
               <ol className="list-decimal list-inside space-y-3 leading-relaxed">

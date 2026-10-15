@@ -15,15 +15,14 @@ export function Pagination({
   const endItem = Math.min(currentPage * pageSize, totalItems);
 
   return (
-    <div className="px-4 py-3 flex items-center justify-between border-t border-slate-100 text-xs text-slate-500">
-      <div>
-        Showing <span className="font-semibold text-slate-700">{startItem}</span> to{' '}
-        <span className="font-semibold text-slate-700">{endItem}</span> of{' '}
-        <span className="font-semibold text-slate-700">{totalItems}</span> results
+    <div className="px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-2 border-t border-slate-200 text-[13px] text-slate-500">
+      <div className="tabular">
+        Showing <span className="font-medium text-slate-800">{startItem}–{endItem}</span> of{' '}
+        <span className="font-medium text-slate-800">{totalItems}</span>
       </div>
       <div className="flex items-center gap-2">
         <Button
-          variant="outline"
+          variant="secondary"
           size="sm"
           disabled={currentPage <= 1}
           onClick={() => onPageChange(currentPage - 1)}
@@ -31,17 +30,17 @@ export function Pagination({
         >
           Previous
         </Button>
-        <span className="px-2 font-medium text-slate-700">
-          Page {currentPage} of {totalPages}
+        <span className="px-1 tabular text-slate-600">
+          {currentPage} / {totalPages}
         </span>
         <Button
-          variant="outline"
+          variant="secondary"
           size="sm"
           disabled={currentPage >= totalPages}
           onClick={() => onPageChange(currentPage + 1)}
         >
           Next
-          <ChevronRight className="w-4 h-4 ml-1" />
+          <ChevronRight className="w-3.5 h-3.5" />
         </Button>
       </div>
     </div>

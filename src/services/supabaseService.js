@@ -11,6 +11,7 @@
 
 import { supabase } from './supabaseClient';
 import { mockDataService } from './mockDataService';
+import { buildCashierSummary } from '../utils/cashierSummary';
 
 // Staff usernames map to Supabase Auth emails (must match schema.sql)
 const AUTH_EMAIL_DOMAIN = 'grocery.local';
@@ -389,6 +390,16 @@ export const supabaseService = {
       ]);
       if (!sale) return { success: false, error: 'Sale not found' };
       return { success: true, data: { sale: toCamel(sale), items: toCamel(items) } };
+    });
+  },
+
+  // Today's bills for one counter cashier (database only returns a cashier's own bills)
+  async getCashierSummary(cashierId) {
+    return run(async () => {
+      let q = supabase.from('sales').select('*').gte('date', localDayStartIso(localDateStr(new Date())));
+      if (cashierId) q = q.eq('cashier_id', cashierId);
+      const rows = check(await q.order('date', { ascending: false }));
+      return { success: true, data: buildCashierSummary(toCamel(rows), cashierId) };
     });
   },
 

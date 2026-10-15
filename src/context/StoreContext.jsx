@@ -175,7 +175,7 @@ export function StoreProvider({ children }) {
       return res;
     } catch (err) {
       console.error('Failed to sync product to Google Sheets:', err);
-      showToast('Error syncing product to Google Sheets', 'error');
+      showToast('Could not sync the product. It will retry on the next sync.', 'error');
       return { success: false, error: err.message };
     }
   }, [categories, showToast]);
@@ -194,7 +194,7 @@ export function StoreProvider({ children }) {
       return await api.deleteProduct(productId, permanent);
     } catch (err) {
       console.error('Failed to delete from Google Sheets:', err);
-      showToast('Failed to delete from Google Sheets', 'error');
+      showToast('Could not delete. Check your connection and try again.', 'error');
       refreshAllData(true);
       return { success: false, error: err.message };
     }

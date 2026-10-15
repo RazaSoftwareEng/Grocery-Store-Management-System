@@ -7,7 +7,8 @@
 --
 -- Creates:
 --   * All tables (same fields as the old Google Sheets tabs)
---   * Row Level Security: only logged-in, ACTIVE staff can read/write
+--   * Row Level Security: manager (ADMIN) has full access; counter cashiers
+--     can only bill (read catalog, add customers, see their own bills)
 --   * Atomic functions for sales, cancellations, stock, purchases
 --   * Dashboard + report aggregate functions (computed in the database)
 --   * Staff user management (passwords stored as bcrypt hashes)
@@ -220,6 +221,7 @@ returns boolean language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.profiles where id = auth.uid() and status = 'ACTIVE' and role = 'ADMIN');
 $$;
 
+-- Store manager (ADMIN): full access to every table
 do $$
 declare t text;
 begin
@@ -229,21 +231,47 @@ begin
   ] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "staff full access" on public.%I', t);
+    execute format('drop policy if exists "admin full access" on public.%I', t);
     execute format(
-      'create policy "staff full access" on public.%I for all to authenticated
-         using ((select public.is_staff())) with check ((select public.is_staff()))', t);
+      'create policy "admin full access" on public.%I for all to authenticated
+         using ((select public.is_admin())) with check ((select public.is_admin()))', t);
   end loop;
 end $$;
+
+-- Counter cashier: billing only. Can read the catalog, add customers at the
+-- counter, and see only the bills they made. Sales are written by create_sale().
+do $$
+declare t text;
+begin
+  foreach t in array array['products', 'categories', 'customers', 'settings'] loop
+    execute format('drop policy if exists "staff read" on public.%I', t);
+    execute format(
+      'create policy "staff read" on public.%I for select to authenticated using ((select public.is_staff()))', t);
+  end loop;
+end $$;
+
+drop policy if exists "staff add customers" on public.customers;
+create policy "staff add customers" on public.customers for insert to authenticated
+  with check ((select public.is_staff()));
+
+drop policy if exists "cashier own sales" on public.sales;
+create policy "cashier own sales" on public.sales for select to authenticated
+  using ((select public.is_staff()) and cashier_id = (select auth.uid())::text);
+
+drop policy if exists "cashier own sale items" on public.sale_items;
+create policy "cashier own sale items" on public.sale_items for select to authenticated
+  using ((select public.is_staff()) and exists (
+    select 1 from public.sales s where s.sale_id = sale_items.sale_id and s.cashier_id = (select auth.uid())::text));
 
 -- Store name/tagline are shown on the login screen before anyone signs in
 drop policy if exists "public read settings" on public.settings;
 create policy "public read settings" on public.settings for select to anon using (true);
 
--- Profiles: staff can read; changes only through the admin_* functions below
+-- Profiles: admin sees all staff, everyone sees themselves; changes only via admin_* functions
 alter table public.profiles enable row level security;
 drop policy if exists "staff read profiles" on public.profiles;
 create policy "staff read profiles" on public.profiles for select to authenticated
-  using ((select public.is_staff()) or id = auth.uid());
+  using ((select public.is_admin()) or id = (select auth.uid()));
 
 grant usage on schema public to anon, authenticated;
 grant select, insert, update, delete on all tables in schema public to authenticated;
@@ -264,8 +292,10 @@ $$;
 -- POS: CREATE SALE (atomic: sale + items + stock deduction + credit)
 -- ---------------------------------------------------------------------
 
+-- SECURITY DEFINER so counter cashiers can record a sale (stock, credit, log)
+-- without having direct write access to those tables.
 create or replace function public.create_sale(p jsonb)
-returns jsonb language plpgsql security invoker set search_path = public as $$
+returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   v_items           jsonb := coalesce(p->'items', '[]'::jsonb);
   v_item            jsonb;
@@ -283,9 +313,15 @@ declare
   v_items_out       jsonb := '[]'::jsonb;
   v_method          text := coalesce(nullif(p->>'paymentMethod', ''), 'CASH');
   v_customer        text := coalesce(nullif(p->>'customerId', ''), 'WALK-IN');
-  v_cashier_name    text := coalesce(nullif(p->>'cashierName', ''), 'Cashier');
+  v_cashier_name    text;
   v_total           numeric := coalesce(nullif(p->>'total', '')::numeric, 0);
 begin
+  if not public.is_staff() then
+    raise exception 'Please sign in to record sales';
+  end if;
+  -- The bill is always recorded under the signed-in staff member
+  select coalesce(nullif(full_name, ''), username) into v_cashier_name from profiles where id = auth.uid();
+
   if jsonb_array_length(v_items) = 0 then
     raise exception 'Cannot checkout with an empty cart';
   end if;
@@ -319,7 +355,7 @@ begin
                      subtotal, discount, tax, total, amount_paid, change, payment_method, payment_status,
                      status, notes, created_at)
   values (gen_id('SALE-'), v_invoice, v_now,
-          coalesce(nullif(p->>'cashierId', ''), 'CASHIER-1'), v_cashier_name,
+          auth.uid()::text, v_cashier_name,
           v_customer, coalesce(nullif(p->>'customerName', ''), 'Walk-in Customer'),
           coalesce(nullif(p->>'subtotal', '')::numeric, 0),
           coalesce(nullif(p->>'discount', '')::numeric, 0),
@@ -380,6 +416,9 @@ declare
   v_new   numeric;
   v_now   timestamptz := now();
 begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
   select * into v_sale from sales where sale_id = p_sale_id for update;
   if not found then raise exception 'Sale record not found'; end if;
   if v_sale.status = 'CANCELLED' then raise exception 'Sale is already cancelled'; end if;
@@ -428,6 +467,9 @@ declare
   v_prev  numeric;
   v_new   numeric;
 begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
   if v_qty <= 0 then raise exception 'Adjustment quantity must be greater than 0'; end if;
 
   select current_stock into v_prev from products where product_id = p_product_id for update;
@@ -475,6 +517,9 @@ declare
   v_seq       int;
   v_purchase  purchases%rowtype;
 begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
   if jsonb_array_length(v_items) = 0 then
     raise exception 'Purchase must contain at least one item';
   end if;
@@ -515,6 +560,9 @@ declare
   v_pi   purchase_items%rowtype;
   v_new  numeric;
 begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
   select * into v_pur from purchases where purchase_id = p_purchase_id for update;
   if not found then raise exception 'Purchase order not found'; end if;
   if v_pur.status = 'CONFIRMED' then raise exception 'Purchase order is already confirmed'; end if;
@@ -557,6 +605,9 @@ create or replace function public.record_customer_payment(p_customer_id text, p_
 returns numeric language plpgsql security invoker set search_path = public as $$
 declare v_new numeric;
 begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
   update customers set outstanding_balance = greatest(0, outstanding_balance - coalesce(p_amount, 0)), updated_at = now()
    where customer_id = p_customer_id
   returning outstanding_balance into v_new;
@@ -571,6 +622,9 @@ create or replace function public.record_supplier_payment(p_supplier_id text, p_
 returns numeric language plpgsql security invoker set search_path = public as $$
 declare v_new numeric;
 begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
   update suppliers set outstanding_balance = greatest(0, outstanding_balance - coalesce(p_amount, 0)), updated_at = now()
    where supplier_id = p_supplier_id
   returning outstanding_balance into v_new;
@@ -586,7 +640,12 @@ $$;
 -- ---------------------------------------------------------------------
 
 create or replace function public.dashboard_stats(p_tz text default 'Asia/Karachi')
-returns jsonb language sql stable security invoker set search_path = public as $$
+returns jsonb language plpgsql stable security invoker set search_path = public as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
+  return (
   with today as (select (now() at time zone p_tz)::date as d),
   done as (select * from sales where status = 'COMPLETED'),
   today_sales as (select s.* from done s, today where (s.date at time zone p_tz)::date = today.d),
@@ -622,11 +681,17 @@ returns jsonb language sql stable security invoker set search_path = public as $
                                            from done s, today
                                           where (s.date at time zone p_tz)::date > today.d - 7
                                           group by 1) w)
-  );
+  ));
+end;
 $$;
 
 create or replace function public.report_stats(p_start date, p_end date, p_tz text default 'Asia/Karachi')
-returns jsonb language sql stable security invoker set search_path = public as $$
+returns jsonb language plpgsql stable security invoker set search_path = public as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Only the store manager can do this';
+  end if;
+  return (
   with s as (
     select * from sales
      where status = 'COMPLETED' and (date at time zone p_tz)::date between p_start and p_end
@@ -661,7 +726,8 @@ returns jsonb language sql stable security invoker set search_path = public as $
                                           sum(line_total - unit_cost * quantity) as profit
                                      from i group by product_id order by revenue desc limit 10) t)
   )
-  from agg, cogs, ex, inv;
+  from agg, cogs, ex, inv);
+end;
 $$;
 
 -- ---------------------------------------------------------------------

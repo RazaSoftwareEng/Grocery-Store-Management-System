@@ -4,6 +4,8 @@ import { Button } from './Button';
 import { Input } from './Input';
 import { useStore } from '../../context/StoreContext';
 import { useToast } from '../../context/ToastContext';
+import { useConfirm } from '../../context/ConfirmContext';
+import { useFormValidation, rules } from '../../hooks/useFormValidation';
 import { api } from '../../services/api';
 import {
   Database,
@@ -12,18 +14,15 @@ import {
   ShieldCheck,
   Save,
   RotateCcw,
-  ExternalLink,
   Trash2,
-  Copy,
-  Check,
   HelpCircle,
   FileCode,
-  Globe
 } from 'lucide-react';
 
 export function ConnectGoogleSheetModal({ isOpen, onClose }) {
   const { isLiveBackend, refreshAllData } = useStore();
   const { showToast } = useToast();
+  const confirm = useConfirm();
 
   const [activeTab, setActiveTab] = useState('connect'); // 'connect' | 'guide' | 'scripts'
   const [appsScriptUrl, setAppsScriptUrl] = useState(api.getEndpointUrl() || '');
@@ -32,11 +31,22 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
   const [isSaving, setIsSaving] = useState(false);
   const [copiedScript, setCopiedScript] = useState('');
 
-  const handleTestConnection = async () => {
-    if (!appsScriptUrl.trim()) {
-      showToast('Please enter a Google Apps Script Web App URL first', 'warning');
-      return;
+  const v = useFormValidation(
+    { appsScriptUrl },
+    {
+      appsScriptUrl: (val) => {
+        if (!val.trim()) return 'Paste your Apps Script web app URL';
+        const urlError = rules.url(val);
+        if (urlError) return urlError;
+        return /script\.google(usercontent)?\.com/.test(val) && /\/exec\/?$/.test(val.trim())
+          ? ''
+          : 'Use the web app URL from script.google.com. It ends with /exec';
+      },
     }
+  );
+
+  const handleTestConnection = async () => {
+    if (!v.validate()) return;
 
     try {
       setIsTesting(true);
@@ -57,10 +67,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
   };
 
   const handleSaveAndConnect = async () => {
-    if (!appsScriptUrl.trim()) {
-      showToast('Please enter your Google Apps Script Web App URL', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsSaving(true);
@@ -83,9 +90,12 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
   };
 
   const handleClearDummyData = async () => {
-    const confirmed = window.confirm(
-      'Are you sure you want to remove all dummy/sample products, categories, and sales? This will leave your inventory empty (0 items) so you can manage your own real store products.'
-    );
+    const confirmed = await confirm({
+      title: 'Remove all sample data?',
+      message: 'This deletes every preloaded sample product, category and sale so you can start with an empty catalog. This cannot be undone.',
+      confirmText: 'Remove sample data',
+      tone: 'danger',
+    });
     if (!confirmed) return;
 
     api.clearAllDummyData();
@@ -94,9 +104,12 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
   };
 
   const handleRestoreDemoData = async () => {
-    const confirmed = window.confirm(
-      'Restore sample Pakistani grocery items (28 products, 8 categories, demo suppliers)?'
-    );
+    const confirmed = await confirm({
+      title: 'Restore the demo catalog?',
+      message: 'This adds 28 sample grocery products, 8 categories and demo suppliers back to the store.',
+      confirmText: 'Restore samples',
+      tone: 'info',
+    });
     if (!confirmed) return;
 
     api.resetLocalDatabase();
@@ -125,7 +138,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
           <button
             type="button"
             onClick={() => setActiveTab('connect')}
-            className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-2 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-2 ${
               activeTab === 'connect'
                 ? 'bg-emerald-50 text-emerald-800'
                 : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
@@ -137,7 +150,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
           <button
             type="button"
             onClick={() => setActiveTab('guide')}
-            className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-2 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-2 ${
               activeTab === 'guide'
                 ? 'bg-emerald-50 text-emerald-800'
                 : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
@@ -149,7 +162,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
           <button
             type="button"
             onClick={() => setActiveTab('scripts')}
-            className={`px-3 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-2 ${
+            className={`px-3 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-2 ${
               activeTab === 'scripts'
                 ? 'bg-emerald-50 text-emerald-800'
                 : 'text-slate-500 hover:text-slate-800 hover:bg-slate-50'
@@ -178,10 +191,10 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
                   }`}
                 />
                 <div>
-                  <h4 className="text-xs font-bold uppercase tracking-wider">
-                    {isLiveBackend ? '🟢 Connected: Google Sheets Backend' : '⚡ Local Demo Storage Mode'}
+                  <h4 className="text-xs font-semibold ">
+                    {isLiveBackend ? 'Connected to Google Sheets' : 'Local demo mode'}
                   </h4>
-                  <p className="text-[11px] opacity-80 mt-0.5">
+                  <p className="text-xs opacity-80 mt-0.5">
                     {isLiveBackend
                       ? 'Live CRUD: Sales, Products, Stock, and Expenses are writing to your Google Sheet.'
                       : 'Running locally in your browser. Connect Google Sheets below to save data to the cloud.'}
@@ -197,20 +210,18 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
             </div>
 
             {/* Input URL */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700">
-                Google Apps Script Web App URL:
-              </label>
-              <Input
-                value={appsScriptUrl}
-                onChange={(e) => setAppsScriptUrl(e.target.value)}
-                placeholder="https://script.google.com/macros/s/AKfycby.../exec"
-                className="font-mono text-xs"
-              />
-              <p className="text-[11px] text-slate-400">
-                Google Sheets &gt; Extensions &gt; Apps Script &gt; Deploy &gt; Manage deployments &gt; Web app URL
-              </p>
-            </div>
+            <Input
+              label="Apps Script web app URL *"
+              value={appsScriptUrl}
+              onChange={(e) => {
+                setAppsScriptUrl(e.target.value);
+                setTestResult(null);
+              }}
+              placeholder="https://script.google.com/macros/s/AKfycby.../exec"
+              className="font-mono text-[13px]"
+              hint="Google Sheets > Extensions > Apps Script > Deploy > Manage deployments > Web app URL"
+              {...v.field('appsScriptUrl')}
+            />
 
             {/* Actions: Test & Connect */}
             <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -230,7 +241,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
                 onClick={handleSaveAndConnect}
                 isLoading={isSaving}
                 icon={Save}
-                className="font-bold shadow-xs"
+                className="font-semibold shadow-xs"
               >
                 Save & Connect Live URL
               </Button>
@@ -251,12 +262,12 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                 )}
                 <div>
-                  <p className="font-bold">
+                  <p className="font-semibold">
                     {testResult.success
                       ? 'Connection Verified! Google Sheets is ready.'
                       : 'Connection Failed'}
                   </p>
-                  <p className="mt-0.5 text-[11px] opacity-90">
+                  <p className="mt-0.5 text-xs opacity-90">
                     {testResult.message || testResult.error}
                   </p>
                 </div>
@@ -265,15 +276,15 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
 
             {/* Dummy Data Removal Section */}
             <div className="pt-4 border-t border-slate-200">
-              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">
+              <h4 className="text-xs font-semibold text-slate-800 mb-2">
                 Catalog & Sample Data Management
               </h4>
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold text-slate-800">
                     Empty Catalog (Remove Dummy Data)
                   </p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
+                  <p className="text-xs text-slate-500 mt-0.5">
                     Delete all preloaded sample products and categories to start with 0 items for your real store.
                   </p>
                 </div>
@@ -284,7 +295,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
                     size="xs"
                     icon={Trash2}
                     onClick={handleClearDummyData}
-                    className="font-bold"
+                    className="font-semibold"
                   >
                     Clear Dummy Data
                   </Button>
@@ -309,7 +320,7 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
           <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1 text-xs">
             {/* Roman Urdu Summary Box */}
             <div className="p-3.5 rounded-xl bg-emerald-50/80 border border-emerald-200 text-emerald-950 space-y-1.5">
-              <h4 className="font-bold text-sm text-emerald-900">
+              <h4 className="font-semibold text-sm text-emerald-900">
                 Google Sheet Connect Karne Ka Asaan Tareeqa (Roman Urdu Guide)
               </h4>
               <p className="text-xs leading-relaxed">
@@ -324,60 +335,60 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
 
             {/* Detailed English Steps */}
             <div className="space-y-3 pt-2 text-slate-700">
-              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-xs">
+              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-semibold flex items-center justify-center shrink-0 text-xs">
                   1
                 </span>
                 <div>
-                  <h5 className="font-bold text-slate-900">Create New Google Sheet</h5>
+                  <h5 className="font-semibold text-slate-900">Create New Google Sheet</h5>
                   <p className="text-slate-600 mt-0.5">
-                    Open <a href="https://sheets.new" target="_blank" rel="noreferrer" className="text-emerald-600 font-bold underline">sheets.new</a> in your browser. Name the sheet <em>Grocery Store Database</em>.
+                    Open <a href="https://sheets.new" target="_blank" rel="noreferrer" className="text-emerald-600 font-semibold underline">sheets.new</a> in your browser. Name the sheet <em>Grocery Store Database</em>.
                   </p>
                 </div>
               </div>
 
-              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-xs">
+              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-semibold flex items-center justify-center shrink-0 text-xs">
                   2
                 </span>
                 <div>
-                  <h5 className="font-bold text-slate-900">Open Apps Script Editor</h5>
+                  <h5 className="font-semibold text-slate-900">Open Apps Script Editor</h5>
                   <p className="text-slate-600 mt-0.5">
                     In Google Sheets menu bar, click <strong>Extensions</strong> &gt; <strong>Apps Script</strong>.
                   </p>
                 </div>
               </div>
 
-              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-xs">
+              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-semibold flex items-center justify-center shrink-0 text-xs">
                   3
                 </span>
                 <div>
-                  <h5 className="font-bold text-slate-900">Paste Backend Code</h5>
+                  <h5 className="font-semibold text-slate-900">Paste Backend Code</h5>
                   <p className="text-slate-600 mt-0.5">
-                    Copy the contents of <code className="bg-slate-200 px-1.5 py-0.5 rounded text-[11px]">backend/Code.gs</code> and paste it into <code className="bg-slate-200 px-1.5 py-0.5 rounded text-[11px]">Code.gs</code>. Then click <strong>+</strong> &gt; <strong>Script</strong>, name it <code className="bg-slate-200 px-1.5 py-0.5 rounded text-[11px]">Setup</code>, and paste the contents of <code className="bg-slate-200 px-1.5 py-0.5 rounded text-[11px]">backend/Setup.gs</code>.
+                    Copy the contents of <code className="bg-slate-200 px-1.5 py-0.5 rounded text-xs">backend/Code.gs</code> and paste it into <code className="bg-slate-200 px-1.5 py-0.5 rounded text-xs">Code.gs</code>. Then click <strong>+</strong> &gt; <strong>Script</strong>, name it <code className="bg-slate-200 px-1.5 py-0.5 rounded text-xs">Setup</code>, and paste the contents of <code className="bg-slate-200 px-1.5 py-0.5 rounded text-xs">backend/Setup.gs</code>.
                   </p>
                 </div>
               </div>
 
-              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-xs">
+              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-semibold flex items-center justify-center shrink-0 text-xs">
                   4
                 </span>
                 <div>
-                  <h5 className="font-bold text-slate-900">Run setupDatabase</h5>
+                  <h5 className="font-semibold text-slate-900">Run setupDatabase</h5>
                   <p className="text-slate-600 mt-0.5">
                     In the Apps Script toolbar function dropdown, select <strong>setupDatabase</strong> and click <strong>Run</strong>. Accept Google's authorization prompt (Advanced &gt; Go to Untitled project). All 13 sheets with green header styling will be created immediately with zero dummy items.
                   </p>
                 </div>
               </div>
 
-              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-xs">
+              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-semibold flex items-center justify-center shrink-0 text-xs">
                   5
                 </span>
                 <div>
-                  <h5 className="font-bold text-slate-900">Deploy as Web App</h5>
+                  <h5 className="font-semibold text-slate-900">Deploy as Web App</h5>
                   <p className="text-slate-600 mt-0.5">
                     Click <strong>Deploy</strong> (top right) &gt; <strong>New deployment</strong>.
                     <br />• Select Type: <strong>Web app</strong>
@@ -389,12 +400,12 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
                 </div>
               </div>
 
-              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0 text-xs">
+              <div className="flex gap-3 items-start p-3 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="w-6 h-6 rounded-full bg-emerald-600 text-white font-semibold flex items-center justify-center shrink-0 text-xs">
                   6
                 </span>
                 <div>
-                  <h5 className="font-bold text-slate-900">Paste & Connect</h5>
+                  <h5 className="font-semibold text-slate-900">Paste & Connect</h5>
                   <p className="text-slate-600 mt-0.5">
                     Paste the Web App URL in the <strong>Connect Web App</strong> tab and click <strong>Save & Connect Live URL</strong>. That is it! All your Add, Update, and Delete operations will now sync directly to your Google Sheet.
                   </p>
@@ -414,30 +425,30 @@ export function ConnectGoogleSheetModal({ isOpen, onClose }) {
             <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
               <div className="flex items-center justify-between">
                 <div>
-                  <span className="font-bold text-slate-900 font-mono">backend/Code.gs</span>
-                  <p className="text-[11px] text-slate-500">Core API: POS Sales, Inventory, Customers, Expenses, Concurrency Locks</p>
+                  <span className="font-semibold text-slate-900 font-mono">backend/Code.gs</span>
+                  <p className="text-xs text-slate-500">Core API: POS Sales, Inventory, Customers, Expenses, Concurrency Locks</p>
                 </div>
-                <span className="text-[11px] text-slate-500 font-medium">~1,500 lines</span>
+                <span className="text-xs text-slate-500 font-medium">~1,500 lines</span>
               </div>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
               <div className="flex items-center justify-between">
                 <div>
-                  <span className="font-bold text-slate-900 font-mono">backend/Setup.gs</span>
-                  <p className="text-[11px] text-slate-500">Schema Initialization: Creates 13 clean sheets with zero dummy items</p>
+                  <span className="font-semibold text-slate-900 font-mono">backend/Setup.gs</span>
+                  <p className="text-xs text-slate-500">Schema Initialization: Creates 13 clean sheets with zero dummy items</p>
                 </div>
-                <span className="text-[11px] text-slate-500 font-medium">142 lines</span>
+                <span className="text-xs text-slate-500 font-medium">142 lines</span>
               </div>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
               <div className="flex items-center justify-between">
                 <div>
-                  <span className="font-bold text-slate-900 font-mono">backend/SeedData.gs</span>
-                  <p className="text-[11px] text-slate-500">Optional demo data: 28 sample Pakistani grocery items (only if you want samples)</p>
+                  <span className="font-semibold text-slate-900 font-mono">backend/SeedData.gs</span>
+                  <p className="text-xs text-slate-500">Optional demo data: 28 sample Pakistani grocery items (only if you want samples)</p>
                 </div>
-                <span className="text-[11px] text-slate-500 font-medium">146 lines</span>
+                <span className="text-xs text-slate-500 font-medium">146 lines</span>
               </div>
             </div>
           </div>

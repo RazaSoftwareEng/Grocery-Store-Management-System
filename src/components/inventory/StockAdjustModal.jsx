@@ -1,20 +1,27 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
-import { Input, Select } from '../common/Input';
+import { Input, Select, FieldLabel } from '../common/Input';
 import { useStore } from '../../context/StoreContext';
 import { useToast } from '../../context/ToastContext';
+import { useFormValidation } from '../../hooks/useFormValidation';
 import { api } from '../../services/api';
-import { ArrowLeftRight, AlertTriangle } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, Plus, Minus, Equal } from 'lucide-react';
 
 const REASON_OPTIONS = [
-  { value: 'Inventory Audit Correction', label: 'Inventory Audit Correction' },
-  { value: 'Damaged Goods / Spoilage', label: 'Damaged Goods / Spoilage' },
-  { value: 'Expired Stock Discarded', label: 'Expired Stock Discarded' },
-  { value: 'Supplier Direct Return', label: 'Supplier Direct Return' },
-  { value: 'Customer Return Restock', label: 'Customer Return Restock' },
-  { value: 'Found Extra Inventory', label: 'Found Extra Inventory' },
-  { value: 'Other Reason', label: 'Other Reason' },
+  { value: 'Inventory Audit Correction', label: 'Inventory audit correction' },
+  { value: 'Damaged Goods / Spoilage', label: 'Damaged goods / spoilage' },
+  { value: 'Expired Stock Discarded', label: 'Expired stock discarded' },
+  { value: 'Supplier Direct Return', label: 'Returned to supplier' },
+  { value: 'Customer Return Restock', label: 'Customer return restocked' },
+  { value: 'Found Extra Inventory', label: 'Found extra inventory' },
+  { value: 'Other Reason', label: 'Other reason' },
+];
+
+const ACTIONS = [
+  { id: 'ADD', label: 'Add', Icon: Plus },
+  { id: 'SUBTRACT', label: 'Deduct', Icon: Minus },
+  { id: 'SET', label: 'Set exact', Icon: Equal },
 ];
 
 export function StockAdjustModal({
@@ -32,9 +39,40 @@ export function StockAdjustModal({
   const [customReason, setCustomReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const currentStock = Number(product?.currentStock) || 0;
+
+  const v = useFormValidation(
+    { quantity, customReason, adjustmentType, reason },
+    {
+      quantity: (val, all) => {
+        if (String(val).trim() === '') return 'Enter a quantity';
+        const n = Number(val);
+        if (Number.isNaN(n)) return 'Numbers only';
+        if (all.adjustmentType === 'SET') return n < 0 ? "Stock can't be negative" : '';
+        if (n <= 0) return 'Quantity must be more than 0';
+        if (all.adjustmentType === 'SUBTRACT' && n > currentStock) {
+          return `Only ${currentStock} in stock. You can't deduct more than that.`;
+        }
+        return '';
+      },
+      customReason: (val, all) =>
+        all.reason === 'Other Reason' && !val.trim() ? 'Describe the reason for this adjustment' : '',
+    }
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      setAdjustmentType('ADD');
+      setQuantity('');
+      setReason('Inventory Audit Correction');
+      setCustomReason('');
+      v.reset();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, product?.productId]);
+
   if (!product) return null;
 
-  const currentStock = Number(product.currentStock) || 0;
   const qtyNum = parseFloat(quantity) || 0;
 
   let projectedStock = currentStock;
@@ -42,24 +80,13 @@ export function StockAdjustModal({
   else if (adjustmentType === 'SUBTRACT') projectedStock = Math.max(0, currentStock - qtyNum);
   else if (adjustmentType === 'SET') projectedStock = qtyNum;
 
+  const delta = projectedStock - currentStock;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!v.validate()) return;
 
-    if (qtyNum <= 0) {
-      showToast('Quantity must be greater than zero', 'warning');
-      return;
-    }
-
-    if (adjustmentType === 'SUBTRACT' && qtyNum > currentStock) {
-      showToast(`Cannot subtract more than current inventory (${currentStock})`, 'warning');
-      return;
-    }
-
-    const finalReason = reason === 'Other Reason' ? customReason : reason;
-    if (reason === 'Other Reason' && !customReason.trim()) {
-      showToast('Please specify the reason for this adjustment', 'warning');
-      return;
-    }
+    const finalReason = reason === 'Other Reason' ? customReason.trim() : reason;
 
     try {
       setIsSubmitting(true);
@@ -72,7 +99,7 @@ export function StockAdjustModal({
       });
 
       if (res.success) {
-        showToast('Stock adjusted and movement logged to Google Sheets', 'success');
+        showToast(`Stock for "${product.name}" is now ${projectedStock} ${product.unit}`, 'success');
         await refreshAllData();
         if (onSuccess) onSuccess();
         onClose();
@@ -80,7 +107,7 @@ export function StockAdjustModal({
         showToast(res.error || 'Failed to adjust stock', 'error');
       }
     } catch {
-      showToast('Error adjusting stock', 'error');
+      showToast('Could not adjust stock. Check your connection and try again.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -90,95 +117,91 @@ export function StockAdjustModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Adjust Inventory Stock"
-      subtitle={`Product: ${product.name} (Current: ${currentStock} ${product.unit})`}
+      title="Adjust stock"
+      subtitle={`${product.name} · currently ${currentStock} ${product.unit}`}
       maxWidth="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button type="submit" form="stock-adjust-form" variant="primary" isLoading={isSubmitting} icon={ArrowLeftRight}>
+            Apply adjustment
+          </Button>
+        </>
+      }
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Adjustment Type Selector */}
-        <div>
-          <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 block mb-1.5">
-            Adjustment Action
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { id: 'ADD', label: 'Add Stock (+)' },
-              { id: 'SUBTRACT', label: 'Deduct (-)' },
-              { id: 'SET', label: 'Set Exact (=)' },
-            ].map((act) => (
+      <form id="stock-adjust-form" ref={v.formRef} onSubmit={handleSubmit} noValidate className="space-y-4">
+        <div className="flex flex-col gap-1.5">
+          <FieldLabel label="Action" />
+          <div className="grid grid-cols-3 p-1 gap-1 bg-slate-100 border border-slate-200 rounded-xl" role="radiogroup">
+            {ACTIONS.map(({ id, label, Icon }) => (
               <button
-                key={act.id}
+                key={id}
                 type="button"
-                onClick={() => setAdjustmentType(act.id)}
-                className={`py-2 px-3 text-xs font-bold rounded-xl border transition-all ${
-                  adjustmentType === act.id
-                    ? 'border-emerald-600 bg-emerald-600 text-white shadow-xs'
-                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                role="radio"
+                aria-checked={adjustmentType === id}
+                onClick={() => setAdjustmentType(id)}
+                className={`h-8 inline-flex items-center justify-center gap-1.5 text-[13px] font-medium rounded-lg transition-all duration-150 ${
+                  adjustmentType === id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                {act.label}
+                <Icon className="w-3.5 h-3.5" />
+                {label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Quantity */}
         <Input
-          label={
-            adjustmentType === 'SET'
-              ? 'New Absolute Stock Quantity *'
-              : `Quantity to ${adjustmentType === 'ADD' ? 'Add' : 'Deduct'} *`
-          }
+          label={adjustmentType === 'SET' ? 'New stock quantity *' : `Quantity to ${adjustmentType === 'ADD' ? 'add' : 'deduct'} *`}
           type="number"
-          min="1"
+          inputMode="decimal"
+          min="0"
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}
           placeholder="0"
-          required
+          suffix={product.unit}
+          className="tabular"
           autoFocus
+          {...v.field('quantity')}
         />
 
-        {/* Reason */}
         <Select
-          label="Reason for Adjustment *"
+          label="Reason *"
           options={REASON_OPTIONS}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          required
         />
 
         {reason === 'Other Reason' && (
-          <Input
-            label="Specify Reason *"
-            value={customReason}
-            onChange={(e) => setCustomReason(e.target.value)}
-            placeholder="Type reason here..."
-            required
-          />
+          <div className="animate-in fade-in slide-in-from-top-1">
+            <Input
+              label="Describe the reason *"
+              value={customReason}
+              onChange={(e) => setCustomReason(e.target.value)}
+              placeholder="e.g. Rats damaged two cartons"
+              autoFocus
+              {...v.field('customReason')}
+            />
+          </div>
         )}
 
-        {/* Live Calculation Preview */}
-        <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between text-xs">
-          <span className="text-slate-600">Updated Stock will be:</span>
-          <span className="text-sm font-black text-slate-900">
-            {projectedStock} {product.unit}
+        <div className="px-3.5 py-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-[13px]">
+          <span className="text-slate-500">After this change</span>
+          <span className="flex items-center gap-2 tabular">
+            <span className="text-slate-500">{currentStock}</span>
+            <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+            <span key={projectedStock} className="text-[15px] font-semibold text-slate-900 animate-bump inline-block">
+              {projectedStock} {product.unit}
+            </span>
+            {delta !== 0 && (
+              <span className={`text-xs font-medium ${delta > 0 ? 'text-brand-600' : 'text-rose-600'}`}>
+                ({delta > 0 ? '+' : ''}
+                {delta})
+              </span>
+            )}
           </span>
-        </div>
-
-        {/* Actions */}
-        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            size="sm"
-            isLoading={isSubmitting}
-            icon={ArrowLeftRight}
-          >
-            Apply Adjustment
-          </Button>
         </div>
       </form>
     </Modal>

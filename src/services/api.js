@@ -8,6 +8,7 @@ import { AppsScriptService } from './appsScriptService';
 import { mockDataService } from './mockDataService';
 import { isSupabaseConfigured } from './supabaseClient';
 import { supabaseService } from './supabaseService';
+import { buildCashierSummary } from '../utils/cashierSummary';
 
 const STORED_URL_KEY = 'gsms_apps_script_url';
 
@@ -202,6 +203,12 @@ class ApiService {
       }
     }
     return mockDataService.getSaleDetails(saleId);
+  }
+
+  async getCashierSummary(cashierId) {
+    const res = await this.getSales();
+    if (!res.success) return res;
+    return { success: true, data: buildCashierSummary(res.data || [], cashierId) };
   }
 
   async getPurchases() {

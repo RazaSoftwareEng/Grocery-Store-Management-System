@@ -2,30 +2,30 @@ import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
 import { api } from '../services/api';
 import { Table } from '../components/common/Table';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
 import { Input, Select } from '../components/common/Input';
+import { PageHeader } from '../components/common/Card';
+import { FormErrorSummary } from '../components/common/FormErrorSummary';
+import { useFormValidation } from '../hooks/useFormValidation';
 import { formatDate } from '../utils/formatters';
 import {
-  Users as UsersIcon,
   UserPlus,
   ShieldCheck,
   ShoppingCart,
   Trash2,
   Edit,
-  KeyRound,
-  CheckCircle2,
-  AlertCircle,
-  Database
 } from 'lucide-react';
 
 export function Users() {
   const { users, refreshAllData, isLiveBackend } = useStore();
   const { currentUser } = useAuth();
   const { showToast } = useToast();
+  const confirm = useConfirm();
 
   const [userList, setUserList] = useState(users || []);
   const [isLoading, setIsLoading] = useState(false);
@@ -39,6 +39,29 @@ export function Users() {
     password: '',
     status: 'ACTIVE',
   });
+
+  const v = useFormValidation(
+    { ...formData, isNew: !editingUser },
+    {
+      fullName: (val) => {
+        const t = val.trim();
+        if (!t) return 'Full name is required';
+        return t.length < 2 ? 'Name must be at least 2 characters' : '';
+      },
+      username: (val) => {
+        const t = val.trim().toLowerCase();
+        if (!t) return 'Username is required';
+        if (!/^[a-z0-9._-]{3,24}$/.test(t)) return '3–24 characters: letters, numbers, dot, dash or underscore';
+        if (!editingUser && userList.some((u) => u.username?.toLowerCase() === t)) return 'This username is already taken';
+        return '';
+      },
+      password: (val, all) => {
+        if (!val) return all.isNew ? 'Set a password or PIN' : '';
+        return val.length < 4 ? 'Use at least 4 characters' : '';
+      },
+      role: (val) => (!val ? 'Choose a role' : ''),
+    }
+  );
 
   // Keep local userList in sync with store
   useEffect(() => {
@@ -75,6 +98,7 @@ export function Users() {
       password: '',
       status: 'ACTIVE',
     });
+    v.reset();
     setIsModalOpen(true);
   };
 
@@ -88,6 +112,7 @@ export function Users() {
       password: '', // Blank unless changing
       status: u.status || 'ACTIVE',
     });
+    v.reset();
     setIsModalOpen(true);
   };
 
@@ -97,7 +122,7 @@ export function Users() {
       return;
     }
 
-    if (!window.confirm(`Delete user account "${u.fullName || u.username}" from Google Sheets?`)) {
+    if (!(await confirm({ title: `Delete ${u.fullName || u.username}?`, message: 'This staff member will no longer be able to sign in. Past sales keep their name.', confirmText: 'Delete account', tone: 'danger' }))) {
       return;
     }
 
@@ -114,7 +139,7 @@ export function Users() {
         loadUsers();
       }
     } catch {
-      showToast('Error deleting user from Google Sheets', 'error');
+      showToast('Could not delete the account. Try again.', 'error');
       loadUsers();
     }
   };
@@ -122,15 +147,7 @@ export function Users() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!formData.username.trim()) {
-      showToast('Username is required', 'warning');
-      return;
-    }
-
-    if (!editingUser && !formData.password) {
-      showToast('Password / PIN is required for new accounts', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsLoading(true);
@@ -143,7 +160,7 @@ export function Users() {
       const res = await api.saveUser(payload);
       if (res.success) {
         showToast(
-          editingUser ? 'User updated successfully' : 'New user created and saved to Google Sheets!',
+          editingUser ? `${payload.fullName} updated` : `Account created for ${payload.fullName}`,
           'success'
         );
         setIsModalOpen(false);
@@ -153,7 +170,7 @@ export function Users() {
         showToast(res.error || 'Failed to save user', 'error');
       }
     } catch (err) {
-      showToast(err.message || 'Error saving user to Google Sheets', 'error');
+      showToast(err.message || 'Could not save the account. Try again.', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -165,15 +182,11 @@ export function Users() {
       key: 'fullName',
       render: (row) => (
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 font-bold">
-            {row.role === 'ADMIN' ? (
-              <ShieldCheck className="w-5 h-5 text-emerald-600" />
-            ) : (
-              <ShoppingCart className="w-5 h-5 text-teal-600" />
-            )}
+          <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center text-xs font-semibold">
+            {(row.fullName || row.username || '?').charAt(0).toUpperCase()}
           </div>
           <div>
-            <div className="font-bold text-slate-900 leading-snug">
+            <div className="font-medium text-slate-900 leading-snug">
               {row.fullName || row.username}
             </div>
             <div className="text-xs text-slate-500 font-mono">@{row.username}</div>
@@ -182,22 +195,21 @@ export function Users() {
       ),
     },
     {
-      header: 'Role & Permissions',
+      header: 'Role',
       key: 'role',
       render: (row) => (
-        <span
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold ${
-            row.role === 'ADMIN'
-              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-              : 'bg-teal-50 text-teal-800 border border-teal-200'
-          }`}
-        >
-          {row.role === 'ADMIN' ? '👑 Store Manager / Admin' : '🛒 Counter Cashier'}
+        <span className="inline-flex items-center gap-1.5 text-[13px] text-slate-700">
+          {row.role === 'ADMIN' ? (
+            <ShieldCheck className="w-4 h-4 text-brand-600" strokeWidth={1.8} />
+          ) : (
+            <ShoppingCart className="w-4 h-4 text-slate-400" strokeWidth={1.8} />
+          )}
+          {row.role === 'ADMIN' ? 'Store manager' : 'Cashier'}
         </span>
       ),
     },
     {
-      header: 'Account Status',
+      header: 'Status',
       key: 'status',
       render: (row) => (
         <Badge variant={row.status === 'ACTIVE' ? 'success' : 'neutral'} size="xs">
@@ -206,11 +218,11 @@ export function Users() {
       ),
     },
     {
-      header: 'Last Login',
+      header: 'Last sign-in',
       key: 'lastLogin',
       render: (row) => (
         <span className="text-xs text-slate-500">
-          {row.lastLogin ? formatDate(row.lastLogin) : 'Not logged in yet'}
+          {row.lastLogin ? formatDate(row.lastLogin) : 'Never'}
         </span>
       ),
     },
@@ -226,7 +238,6 @@ export function Users() {
             onClick={() => handleOpenEdit(row)}
             icon={Edit}
             title="Edit user details"
-            className="px-2 py-1 text-xs"
           >
             Edit
           </Button>
@@ -237,7 +248,8 @@ export function Users() {
               onClick={() => handleDeleteUser(row)}
               icon={Trash2}
               title="Delete user"
-              className="text-slate-400 hover:text-rose-600 px-1.5 py-1 text-xs"
+              aria-label={`Delete ${row.username}`}
+              className="w-[30px] px-0 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
             />
           )}
         </div>
@@ -246,52 +258,27 @@ export function Users() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            <UsersIcon className="w-5 h-5 text-emerald-600" />
-            Staff & User Management
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Manage cashier accounts and store managers. All user records sync directly with Google Sheet 'Users'.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            variant="primary"
-            size="md"
-            icon={UserPlus}
-            onClick={handleOpenAdd}
-            className="font-bold shadow-sm"
-          >
-            Add New Staff / Cashier
+      <PageHeader
+        title="Staff & cashiers"
+        description={`${userList.length} accounts · managers have full access, cashiers can only bill.`}
+        actions={
+          <Button variant="primary" icon={UserPlus} onClick={handleOpenAdd}>
+            Add staff
           </Button>
-        </div>
-      </div>
-
-      {/* Sheet Connection Banner */}
-      <div className="p-3.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl flex items-center justify-between text-xs text-emerald-900">
-        <div className="flex items-center gap-2">
-          <Database className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>
-            Connected Tab: <strong>Users</strong> in Google Sheets. Passwords and credentials are authenticated securely.
-          </span>
-        </div>
-        <span className="font-bold text-emerald-700 hidden sm:inline">
-          {userList.length} Total Accounts
-        </span>
-      </div>
+        }
+      />
 
       {/* Users Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
           data={userList}
           keyField="userId"
-          emptyMessage="No user accounts found."
+          isLoading={isLoading && userList.length === 0}
+          emptyMessage="No staff accounts yet"
+          emptyDescription="Add a cashier so they can sign in at the counter."
         />
       </div>
 
@@ -299,75 +286,77 @@ export function Users() {
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title={editingUser ? `Edit Staff Member (@${editingUser.username})` : 'Add New Staff / Cashier'}
-        subtitle="Credentials will be saved to your Google Sheets 'Users' tab."
+        title={editingUser ? 'Edit staff member' : 'New staff account'}
+        subtitle={editingUser ? `@${editingUser.username}` : 'They sign in with this username and password.'}
         maxWidth="max-w-md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setIsModalOpen(false)} disabled={isLoading}>
+              Cancel
+            </Button>
+            <Button type="submit" form="user-form" variant="primary" isLoading={isLoading}>
+              {editingUser ? 'Save changes' : 'Create account'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form id="user-form" ref={v.formRef} onSubmit={handleSubmit} noValidate className="space-y-4">
+          <FormErrorSummary validation={v} />
           <Input
-            label="Full Name *"
+            label="Full name *"
             value={formData.fullName}
             onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
             placeholder="e.g. Muhammad Usman"
-            required
             autoFocus
+            {...v.field('fullName')}
           />
 
           <Input
-            label="Username / Login ID *"
+            label="Username *"
             value={formData.username}
-            onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-            placeholder="e.g. cashier2 or manager1"
-            required
+            onChange={(e) => setFormData({ ...formData, username: e.target.value.toLowerCase().replace(/\s/g, '') })}
+            placeholder="e.g. cashier2"
             disabled={Boolean(editingUser)}
+            hint={editingUser ? "Usernames can't be changed." : 'Lowercase, no spaces.'}
+            className="font-mono text-[13px]"
+            autoComplete="off"
+            {...v.field('username')}
           />
 
           <Input
-            label={editingUser ? 'New Password / PIN (Leave blank to keep current)' : 'Password / Security PIN *'}
+            label={editingUser ? 'New password or PIN' : 'Password or PIN *'}
             type="password"
             value={formData.password}
             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-            placeholder="••••••••"
-            required={!editingUser}
+            placeholder={editingUser ? 'Leave blank to keep the current one' : 'At least 4 characters'}
+            autoComplete="new-password"
+            optional={Boolean(editingUser)}
+            {...v.field('password')}
           />
 
           <Select
-            label="System Role *"
+            label="Role *"
             options={[
-              { value: 'CASHIER', label: 'Counter Cashier (POS Billing & Sales only)' },
-              { value: 'ADMIN', label: 'Store Manager / Admin (Full Access to All Settings)' },
+              { value: 'CASHIER', label: 'Cashier (POS billing only)' },
+              { value: 'ADMIN', label: 'Store manager (full access)' },
             ]}
             value={formData.role}
             onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-            required
+            {...v.field('role')}
           />
 
           {editingUser && (
             <Select
-              label="Account Status"
+              label="Status"
               options={[
-                { value: 'ACTIVE', label: 'Active (Can Log In)' },
-                { value: 'INACTIVE', label: 'Suspended / Inactive' },
+                { value: 'ACTIVE', label: 'Active (can sign in)' },
+                { value: 'INACTIVE', label: 'Suspended' },
               ]}
               value={formData.status}
               onChange={(e) => setFormData({ ...formData, status: e.target.value })}
             />
           )}
 
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setIsModalOpen(false)}
-              disabled={isLoading}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" size="sm" isLoading={isLoading}>
-              {editingUser ? 'Update Staff Member' : 'Create Staff Account'}
-            </Button>
-          </div>
         </form>
       </Modal>
     </div>

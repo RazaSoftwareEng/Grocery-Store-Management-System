@@ -11,7 +11,10 @@ import { Badge } from '../components/common/Badge';
 import { SearchInput } from '../components/common/SearchInput';
 import { Modal } from '../components/common/Modal';
 import { Input } from '../components/common/Input';
-import { Users, UserPlus, DollarSign, Edit, Phone, Download, MapPin } from 'lucide-react';
+import { PageHeader } from '../components/common/Card';
+import { FormErrorSummary } from '../components/common/FormErrorSummary';
+import { useFormValidation, rules } from '../hooks/useFormValidation';
+import { UserPlus, DollarSign, Edit, Phone, Download, MapPin } from 'lucide-react';
 
 export function Customers() {
   const { customers, currencySymbol, refreshAllData } = useStore();
@@ -40,6 +43,40 @@ export function Customers() {
     status: 'ACTIVE',
   });
 
+  const v = useFormValidation(formData, {
+    name: (val) => {
+      const t = val.trim();
+      if (!t) return 'Customer name is required';
+      return t.length < 2 ? 'Name must be at least 2 characters' : '';
+    },
+    phone: (val) => {
+      const msg = rules.phone(val);
+      if (msg) return msg;
+      const digits = val.replace(/\D/g, '');
+      const dup =
+        digits &&
+        customers.find(
+          (c) => c.customerId !== selectedCustomer?.customerId && c.phone && c.phone.replace(/\D/g, '') === digits
+        );
+      return dup ? `This number belongs to ${dup.name}` : '';
+    },
+    creditLimit: rules.nonNegative('Credit limit', { required: false }),
+  });
+
+  const outstanding = Number(paymentCustomer?.outstandingBalance) || 0;
+  const payV = useFormValidation(
+    { paymentAmount },
+    {
+      paymentAmount: (val) => {
+        const msg = rules.positive('Payment amount')(val);
+        if (msg) return msg;
+        return Number(val) > outstanding
+          ? `More than the outstanding ${formatCurrency(outstanding, currencySymbol)}`
+          : '';
+      },
+    }
+  );
+
   const filteredCustomers = customers.filter((c) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -67,6 +104,7 @@ export function Customers() {
       notes: '',
       status: 'ACTIVE',
     });
+    v.reset();
     setIsCustomerModalOpen(true);
   };
 
@@ -81,25 +119,24 @@ export function Customers() {
       notes: cust.notes || '',
       status: cust.status || 'ACTIVE',
     });
+    v.reset();
     setIsCustomerModalOpen(true);
   };
 
   const handleSaveCustomer = async (e) => {
     e.preventDefault();
-    if (!formData.name.trim()) {
-      showToast('Customer name is required', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsSubmitting(true);
       const res = await api.saveCustomer({
         customerId: selectedCustomer?.customerId,
         ...formData,
+        name: formData.name.trim(),
       });
 
       if (res.success) {
-        showToast(selectedCustomer ? 'Customer updated' : 'Customer created', 'success');
+        showToast(selectedCustomer ? `${formData.name.trim()} updated` : `${formData.name.trim()} added`, 'success');
         await refreshAllData();
         setIsCustomerModalOpen(false);
       } else {
@@ -114,11 +151,8 @@ export function Customers() {
 
   const handleRecordPayment = async (e) => {
     e.preventDefault();
+    if (!payV.validate()) return;
     const amt = parseFloat(paymentAmount) || 0;
-    if (amt <= 0) {
-      showToast('Payment amount must be greater than zero', 'warning');
-      return;
-    }
 
     try {
       setIsSubmitting(true);
@@ -159,14 +193,14 @@ export function Customers() {
 
   const columns = [
     {
-      header: 'Customer Name',
+      header: 'Customer',
       key: 'name',
       render: (row) => (
         <div>
-          <span className="font-bold text-slate-900 leading-snug">{row.name}</span>
+          <span className="font-medium text-slate-900 leading-snug">{row.name}</span>
           {row.customerId === 'WALK-IN' && (
-            <span className="ml-2 text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md font-semibold">
-              Default Counter
+            <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-medium">
+              Default
             </span>
           )}
           {row.notes && <p className="text-xs text-slate-400 mt-0.5">{row.notes}</p>}
@@ -174,7 +208,7 @@ export function Customers() {
       ),
     },
     {
-      header: 'Contact Info',
+      header: 'Contact',
       key: 'phone',
       render: (row) => (
         <div className="space-y-0.5 text-xs text-slate-600">
@@ -194,15 +228,13 @@ export function Customers() {
       ),
     },
     {
-      header: 'Outstanding Balance (Khata)',
+      header: 'Khata balance',
       key: 'outstandingBalance',
       render: (row) => {
         const bal = Number(row.outstandingBalance) || 0;
         return (
           <span
-            className={`font-mono font-bold text-sm ${
-              bal > 0 ? 'text-rose-700' : 'text-emerald-700'
-            }`}
+            className={`tabular font-semibold text-sm ${bal > 0 ? 'text-amber-700' : 'text-slate-500'}`}
           >
             {formatCurrency(bal, currencySymbol)}
           </span>
@@ -210,10 +242,10 @@ export function Customers() {
       },
     },
     {
-      header: 'Credit Limit',
+      header: 'Credit limit',
       key: 'creditLimit',
       render: (row) => (
-        <span className="text-xs text-slate-500 font-mono">
+        <span className="text-[13px] text-slate-500 tabular">
           {formatCurrency(row.creditLimit || 0, currencySymbol)}
         </span>
       ),
@@ -243,12 +275,13 @@ export function Customers() {
                 onClick={() => {
                   setPaymentCustomer(row);
                   setPaymentAmount(String(row.outstandingBalance));
+                  setPaymentNotes('');
+                  payV.reset();
                   setIsPaymentModalOpen(true);
                 }}
-                className="text-xs px-2 py-1 text-emerald-700 border-emerald-300 hover:bg-emerald-50"
                 title="Receive payment from customer"
               >
-                Pay
+                Receive
               </Button>
             )}
             <Button
@@ -256,7 +289,9 @@ export function Customers() {
               size="sm"
               icon={Edit}
               onClick={() => handleOpenEdit(row)}
-              className="text-xs px-2 py-1"
+              aria-label={`Edit ${row.name}`}
+              title="Edit customer"
+              className="w-[30px] px-0"
             />
           </div>
         );
@@ -265,42 +300,46 @@ export function Customers() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">Customer CRM & Khata</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Track customer contact lists, credit limits, and store credit debt balances.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" icon={Download} onClick={handleExportCsv}>
-            Export Customers
-          </Button>
-          <Button variant="primary" size="md" icon={UserPlus} onClick={handleOpenAdd} className="font-bold">
-            Add Customer
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Customers"
+        description="Contacts, credit limits and khata balances."
+        actions={
+          <>
+            <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
+              Export
+            </Button>
+            <Button variant="primary" icon={UserPlus} onClick={handleOpenAdd}>
+              Add customer
+            </Button>
+          </>
+        }
+      />
 
       {/* Search */}
-      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs flex items-center gap-3">
+      <div className="flex items-center gap-3">
         <SearchInput
           value={search}
           onChange={(val) => {
             setSearch(val);
             setCurrentPage(1);
           }}
-          placeholder="Search customers by name, phone or neighborhood..."
+          placeholder="Search by name, phone or area"
           className="max-w-md w-full"
         />
       </div>
 
       {/* Customers Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        <Table columns={columns} data={paginatedCustomers} keyField="customerId" />
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <Table
+          columns={columns}
+          data={paginatedCustomers}
+          keyField="customerId"
+          emptyMessage={search ? `No customers match "${search}"` : 'No customers yet'}
+          emptyDescription={search ? 'Try a different name or number.' : 'Add customers to sell on credit and track their khata.'}
+          emptyAction={!search && <Button size="sm" icon={UserPlus} onClick={handleOpenAdd}>Add customer</Button>}
+        />
 
         <Pagination
           currentPage={currentPage}
@@ -315,58 +354,74 @@ export function Customers() {
       <Modal
         isOpen={isCustomerModalOpen}
         onClose={() => setIsCustomerModalOpen(false)}
-        title={selectedCustomer ? 'Edit Customer' : 'Add New Customer'}
+        title={selectedCustomer ? 'Edit customer' : 'New customer'}
+        subtitle={selectedCustomer ? selectedCustomer.name : 'Needed for credit sales and the khata ledger.'}
         maxWidth="max-w-lg"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setIsCustomerModalOpen(false)} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" form="customer-form" variant="primary" isLoading={isSubmitting}>
+              {selectedCustomer ? 'Save changes' : 'Add customer'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSaveCustomer} className="space-y-4">
+        <form id="customer-form" ref={v.formRef} onSubmit={handleSaveCustomer} noValidate className="space-y-4">
+          <FormErrorSummary validation={v} />
           <Input
-            label="Full Name *"
+            label="Full name *"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             placeholder="e.g. Dr. Tariq Mahmood"
-            required
             autoFocus
+            {...v.field('name')}
           />
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="Phone Number"
+              label="Phone number"
+              type="tel"
+              inputMode="tel"
               value={formData.phone}
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              placeholder="+92 321 4567890"
+              placeholder="0321 4567890"
+              optional
+              className="tabular"
+              {...v.field('phone')}
+              isValid={v.field('phone').isValid && !!formData.phone}
             />
             <Input
-              label={`Credit Limit (${currencySymbol})`}
+              label="Credit limit"
               type="number"
+              inputMode="decimal"
               step="any"
+              min="0"
               value={formData.creditLimit}
               onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
               placeholder="10000"
+              suffix={currencySymbol}
+              className="tabular"
+              {...v.field('creditLimit')}
             />
           </div>
 
           <Input
-            label="Street Address / Residence"
+            label="Address"
             value={formData.address}
             onChange={(e) => setFormData({ ...formData, address: e.target.value })}
             placeholder="e.g. House 12-A, Main Avenue"
+            optional
           />
 
           <Input
             label="Notes"
             value={formData.notes}
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-            placeholder="e.g. Regular neighborhood customer, pays at month end"
+            placeholder="e.g. Pays at month end"
+            optional
           />
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-            <Button variant="outline" size="sm" onClick={() => setIsCustomerModalOpen(false)} disabled={isSubmitting}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting}>
-              Save Customer
-            </Button>
-          </div>
         </form>
       </Modal>
 
@@ -375,36 +430,46 @@ export function Customers() {
         <Modal
           isOpen={isPaymentModalOpen}
           onClose={() => setIsPaymentModalOpen(false)}
-          title="Receive Customer Debt Payment"
-          subtitle={`Customer: ${paymentCustomer.name} • Total Debt: ${formatCurrency(paymentCustomer.outstandingBalance, currencySymbol)}`}
+          title="Receive khata payment"
+          subtitle={`${paymentCustomer.name} owes ${formatCurrency(paymentCustomer.outstandingBalance, currencySymbol)}`}
           maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmitting}>
+                Cancel
+              </Button>
+              <Button type="submit" form="customer-payment-form" variant="primary" isLoading={isSubmitting} icon={DollarSign}>
+                Record payment
+              </Button>
+            </>
+          }
         >
-          <form onSubmit={handleRecordPayment} className="space-y-4">
+          <form id="customer-payment-form" ref={payV.formRef} onSubmit={handleRecordPayment} noValidate className="space-y-4">
             <Input
-              label={`Payment Amount (${currencySymbol}) *`}
+              label="Amount received *"
               type="number"
+              inputMode="decimal"
               step="any"
               value={paymentAmount}
               onChange={(e) => setPaymentAmount(e.target.value)}
-              required
+              suffix={currencySymbol}
+              className="tabular"
               autoFocus
+              hint={
+                Number(paymentAmount) > 0 && Number(paymentAmount) <= outstanding
+                  ? `Remaining after this: ${formatCurrency(outstanding - Number(paymentAmount), currencySymbol)}`
+                  : undefined
+              }
+              {...payV.field('paymentAmount')}
             />
 
             <Input
-              label="Receipt Notes / Reference"
+              label="Notes or reference"
               value={paymentNotes}
               onChange={(e) => setPaymentNotes(e.target.value)}
-              placeholder="e.g. Cash paid at counter, settlement of Sep bill"
+              placeholder="e.g. Cash at counter, September bill"
+              optional
             />
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <Button variant="outline" size="sm" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmitting}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting} icon={DollarSign}>
-                Record Payment
-              </Button>
-            </div>
           </form>
         </Modal>
       )}

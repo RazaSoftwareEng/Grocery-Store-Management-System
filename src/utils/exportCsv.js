@@ -4,7 +4,9 @@
 
 export function exportToCsv(filename, headers, rows) {
   if (!rows || !rows.length) {
-    alert('No data to export.');
+    window.dispatchEvent(
+      new CustomEvent('app:toast', { detail: { message: 'There is nothing to export yet.', type: 'info' } })
+    );
     return;
   }
 

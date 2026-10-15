@@ -11,8 +11,9 @@ import { Badge } from '../components/common/Badge';
 import { SearchInput } from '../components/common/SearchInput';
 import { Modal } from '../components/common/Modal';
 import { Input } from '../components/common/Input';
+import { useFormValidation } from '../hooks/useFormValidation';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
-import { Receipt, Eye, Printer, RotateCcw, Download, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Printer, RotateCcw, Download, RefreshCw, AlertTriangle } from 'lucide-react';
 
 export function Sales() {
   const { currencySymbol, refreshAllData } = useStore();
@@ -29,6 +30,16 @@ export function Sales() {
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [cancellingSale, setCancellingSale] = useState(null);
   const [cancelReason, setCancelReason] = useState('');
+  const cancelV = useFormValidation(
+    { cancelReason },
+    {
+      cancelReason: (val) => {
+        const t = val.trim();
+        if (!t) return 'Tell us why this sale is being returned';
+        return t.length < 4 ? 'Add a little more detail (at least 4 characters)' : '';
+      },
+    }
+  );
   const [isSubmittingCancel, setIsSubmittingCancel] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -83,10 +94,7 @@ export function Sales() {
 
   const handleConfirmCancel = async (e) => {
     e.preventDefault();
-    if (!cancelReason.trim()) {
-      showToast('Please specify reason for cancellation / return', 'warning');
-      return;
-    }
+    if (!cancelV.validate()) return;
 
     try {
       setIsSubmittingCancel(true);
@@ -135,8 +143,8 @@ export function Sales() {
       key: 'invoiceNumber',
       render: (row) => (
         <div>
-          <span className="font-bold text-slate-900 font-mono">{row.invoiceNumber}</span>
-          <p className="text-[11px] text-slate-500">{formatDate(row.date || row.createdAt)}</p>
+          <span className="font-semibold text-slate-900 font-mono">{row.invoiceNumber}</span>
+          <p className="text-xs text-slate-500">{formatDate(row.date || row.createdAt)}</p>
         </div>
       ),
     },
@@ -169,7 +177,7 @@ export function Sales() {
       header: 'Total Paid',
       key: 'total',
       render: (row) => (
-        <span className="font-bold text-slate-900 text-sm">
+        <span className="font-semibold text-slate-900 text-sm">
           {formatCurrency(row.total, currencySymbol)}
         </span>
       ),
@@ -216,10 +224,11 @@ export function Sales() {
               onClick={() => {
                 setCancellingSale(row);
                 setCancelReason('');
+                cancelV.reset();
               }}
               icon={RotateCcw}
-              className="text-slate-400 hover:text-rose-600 text-xs px-2 py-1"
-              title="Return / Cancel sale & restore stock"
+              className="text-slate-500 hover:text-rose-700 hover:bg-rose-50"
+              title="Return / cancel sale and restock items"
             >
               Return
             </Button>
@@ -234,24 +243,24 @@ export function Sales() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">Sales & Invoices</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Audit completed transactions, reprint receipts, or process authorized customer returns.
+          <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">Sales & invoices</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Every completed bill. Reprint receipts or process returns.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" icon={RefreshCw} onClick={loadSales}>
-            Sync
+          <Button variant="ghost" icon={RefreshCw} onClick={loadSales}>
+            Refresh
           </Button>
-          <Button variant="outline" size="sm" icon={Download} onClick={handleExportCsv}>
-            Export Invoices
+          <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
+            Export
           </Button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs flex flex-wrap items-center gap-3">
+      <div className="p-3 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-3">
         <SearchInput
           value={search}
           onChange={(val) => {
@@ -294,7 +303,7 @@ export function Sales() {
       </div>
 
       {/* Sales Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
           data={paginatedSales}
@@ -324,50 +333,34 @@ export function Sales() {
         <Modal
           isOpen={Boolean(cancellingSale)}
           onClose={() => setCancellingSale(null)}
-          title={`Return / Cancel Sale ${cancellingSale.invoiceNumber}`}
-          subtitle={`Total: ${formatCurrency(cancellingSale.total, currencySymbol)} • Customer: ${cancellingSale.customerName}`}
+          title={`Return ${cancellingSale.invoiceNumber}`}
+          subtitle={`${formatCurrency(cancellingSale.total, currencySymbol)} · ${cancellingSale.customerName}`}
           maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setCancellingSale(null)} disabled={isSubmittingCancel}>
+                Go back
+              </Button>
+              <Button type="submit" form="cancel-sale-form" variant="danger" isLoading={isSubmittingCancel} icon={RotateCcw}>
+                Return and restock
+              </Button>
+            </>
+          }
         >
-          <form onSubmit={handleConfirmCancel} className="space-y-4">
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800">
-              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Inventory will be automatically restocked</p>
-                <p className="mt-0.5 text-rose-700">
-                  All items in this invoice will be added back into current product stock, and a
-                  logged movement will be saved.
-                </p>
-              </div>
+          <form id="cancel-sale-form" ref={cancelV.formRef} onSubmit={handleConfirmCancel} noValidate className="space-y-4">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-[13px] text-amber-900">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <p>Every item on this invoice goes back into stock and the movement is logged.</p>
             </div>
 
             <Input
-              label="Reason for Return / Cancellation *"
+              label="Reason *"
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
-              placeholder="e.g. Customer changed mind, wrong item billed, damaged goods"
-              required
+              placeholder="e.g. Wrong item billed, damaged goods"
               autoFocus
+              {...cancelV.field('cancelReason')}
             />
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCancellingSale(null)}
-                disabled={isSubmittingCancel}
-              >
-                Go Back
-              </Button>
-              <Button
-                type="submit"
-                variant="danger"
-                size="sm"
-                isLoading={isSubmittingCancel}
-                icon={RotateCcw}
-              >
-                Confirm Return & Restock
-              </Button>
-            </div>
           </form>
         </Modal>
       )}

@@ -1,5 +1,36 @@
 import React from 'react';
-import { Loader2 } from 'lucide-react';
+
+const baseStyles =
+  'relative inline-flex items-center justify-center font-medium whitespace-nowrap select-none rounded-xl border ' +
+  'transition-[background-color,border-color,color,box-shadow,transform] duration-150 ' +
+  'focus-visible:outline-none focus-visible:ring-[3px] ' +
+  'disabled:opacity-50 disabled:cursor-not-allowed enabled:active:translate-y-px';
+
+const variants = {
+  primary:
+    'bg-brand-600 hover:enabled:bg-brand-700 text-white border-transparent shadow-[inset_0_1px_0_rgb(255_255_255/0.12),0_1px_2px_rgb(19_68_48/0.25)] focus-visible:ring-brand-600/25',
+  success:
+    'bg-brand-600 hover:enabled:bg-brand-700 text-white border-transparent shadow-xs focus-visible:ring-brand-600/25',
+  secondary:
+    'bg-white hover:enabled:bg-slate-50 text-slate-900 border-slate-300 hover:enabled:border-slate-400 shadow-xs focus-visible:ring-brand-600/20',
+  outline:
+    'bg-white hover:enabled:bg-slate-50 text-slate-800 border-slate-300 hover:enabled:border-slate-400 shadow-xs focus-visible:ring-brand-600/20',
+  ghost:
+    'bg-transparent hover:enabled:bg-slate-100 text-slate-600 hover:enabled:text-slate-900 border-transparent focus-visible:ring-brand-600/20',
+  danger:
+    'bg-rose-600 hover:enabled:bg-rose-700 text-white border-transparent shadow-xs focus-visible:ring-rose-600/25',
+  'danger-soft':
+    'bg-rose-50 hover:enabled:bg-rose-100 text-rose-700 border-rose-200 focus-visible:ring-rose-600/20',
+};
+
+const sizes = {
+  xs: 'h-7 px-2.5 text-xs gap-1.5',
+  sm: 'h-[30px] px-3 text-[13px] gap-1.5',
+  md: 'h-9 px-3.5 text-sm gap-2',
+  lg: 'h-11 px-[18px] text-[15px] gap-2',
+};
+
+const iconSizes = { xs: 'w-3.5 h-3.5', sm: 'w-3.5 h-3.5', md: 'w-4 h-4', lg: 'w-[18px] h-[18px]' };
 
 export function Button({
   children,
@@ -13,36 +44,44 @@ export function Button({
   onClick,
   ...props
 }) {
-  const baseStyles = 'inline-flex items-center justify-center font-medium transition-all duration-150 rounded-xl focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed select-none active:scale-[0.98]';
-
-  const variants = {
-    primary: 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm hover:shadow focus:ring-emerald-500 border border-transparent',
-    secondary: 'bg-slate-100 hover:bg-slate-200 text-slate-800 focus:ring-slate-400 border border-transparent',
-    outline: 'border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 focus:ring-slate-400',
-    danger: 'bg-rose-600 hover:bg-rose-700 text-white shadow-sm focus:ring-rose-500 border border-transparent',
-    ghost: 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 focus:ring-slate-400',
-  };
-
-  const sizes = {
-    sm: 'px-2.5 py-1.5 text-xs gap-1.5',
-    md: 'px-4 py-2 text-sm gap-2',
-    lg: 'px-5 py-2.5 text-base gap-2.5',
-  };
+  const iconCls = `${iconSizes[size] || iconSizes.md} shrink-0`;
+  const onDark = variant === 'primary' || variant === 'success' || variant === 'danger';
 
   return (
     <button
       type={type}
       disabled={disabled || isLoading}
+      aria-busy={isLoading || undefined}
       onClick={onClick}
       className={`${baseStyles} ${variants[variant] || variants.primary} ${sizes[size] || sizes.md} ${className}`}
       {...props}
     >
-      {isLoading ? (
-        <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-      ) : Icon ? (
-        <Icon className="w-4 h-4 shrink-0" />
-      ) : null}
-      {children}
+      {isLoading && (
+        <span className="absolute inset-0 flex items-center justify-center">
+          <span
+            className={`w-4 h-4 rounded-full border-2 animate-spin ${
+              onDark ? 'border-white/35 border-t-white' : 'border-slate-300 border-t-brand-600'
+            }`}
+          />
+        </span>
+      )}
+      <span className={`inline-flex items-center justify-center gap-[inherit] ${isLoading ? 'invisible' : ''}`}>
+        {Icon ? <Icon className={iconCls} strokeWidth={1.9} /> : null}
+        {children}
+      </span>
     </button>
+  );
+}
+
+/** Small keyboard-shortcut hint, e.g. <Kbd>F9</Kbd> */
+export function Kbd({ children, className = '', onDark = false }) {
+  return (
+    <kbd
+      className={`inline-flex items-center font-mono text-[11px] leading-none px-1.5 py-[3px] rounded border border-b-2 ${
+        onDark ? 'bg-white/15 border-white/25 text-white' : 'bg-white border-slate-300 text-slate-500'
+      } ${className}`}
+    >
+      {children}
+    </kbd>
   );
 }

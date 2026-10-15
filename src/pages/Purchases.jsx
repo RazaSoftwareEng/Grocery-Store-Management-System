@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
+import { useConfirm } from '../context/ConfirmContext';
 import { api } from '../services/api';
 import { formatCurrency, formatDate } from '../utils/formatters';
 import { Table } from '../components/common/Table';
@@ -9,11 +10,12 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
 import { PurchaseModal } from '../components/purchases/PurchaseModal';
-import { Boxes, Plus, CheckCircle, RefreshCw, Eye, Truck } from 'lucide-react';
+import { Plus, CheckCircle, RefreshCw, Eye, Truck } from 'lucide-react';
 
 export function Purchases() {
   const { currencySymbol, refreshAllData } = useStore();
   const { showToast } = useToast();
+  const confirm = useConfirm();
 
   const [purchases, setPurchases] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -45,9 +47,12 @@ export function Purchases() {
 
   const handleConfirmPurchase = async (purchase) => {
     if (
-      !window.confirm(
-        `Confirm receipt of Purchase ${purchase.purchaseNumber}? This will automatically add all items to current store stock and update supplier ledger.`
-      )
+      !(await confirm({
+        title: `Receive ${purchase.purchaseNumber}?`,
+        message: 'All items on this order are added to stock and the supplier ledger is updated.',
+        confirmText: 'Confirm receipt',
+        tone: 'info',
+      }))
     ) {
       return;
     }
@@ -78,10 +83,10 @@ export function Purchases() {
       key: 'purchaseNumber',
       render: (row) => (
         <div>
-          <span className="font-bold text-slate-900 font-mono">
+          <span className="font-semibold text-slate-900 font-mono">
             {row.purchaseNumber}
           </span>
-          <p className="text-[11px] text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-500 mt-0.5">
             {formatDate(row.date || row.createdAt)}
           </p>
         </div>
@@ -91,7 +96,7 @@ export function Purchases() {
       header: 'Supplier',
       key: 'supplierName',
       render: (row) => (
-        <div className="flex items-center gap-1.5 font-bold text-slate-800">
+        <div className="flex items-center gap-1.5 font-semibold text-slate-800">
           <Truck className="w-3.5 h-3.5 text-slate-400" />
           <span>{row.supplierName}</span>
         </div>
@@ -101,7 +106,7 @@ export function Purchases() {
       header: 'Total Amount',
       key: 'total',
       render: (row) => (
-        <span className="font-bold text-slate-900 text-sm">
+        <span className="font-semibold text-slate-900 text-sm">
           {formatCurrency(row.total, currencySymbol)}
         </span>
       ),
@@ -122,7 +127,7 @@ export function Purchases() {
         const bal = Number(row.outstandingBalance) || 0;
         return (
           <span
-            className={`text-xs font-bold ${
+            className={`text-xs font-semibold ${
               bal > 0 ? 'text-amber-800' : 'text-slate-400'
             }`}
           >
@@ -162,7 +167,7 @@ export function Purchases() {
               size="sm"
               onClick={() => handleConfirmPurchase(row)}
               icon={CheckCircle}
-              className="px-2 py-1 text-xs font-bold bg-emerald-600 hover:bg-emerald-700"
+              className="px-2 py-1 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700"
             >
               Confirm
             </Button>
@@ -177,32 +182,26 @@ export function Purchases() {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">
-            Stock Purchases & Orders
+          <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">
+            Purchases
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Procure stock from suppliers, confirm deliveries, and automatically add to inventory.
+          <p className="text-sm text-slate-500 mt-0.5">
+            Order stock from suppliers and confirm deliveries to add it to inventory.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" icon={RefreshCw} onClick={loadData}>
-            Sync
+          <Button variant="ghost" icon={RefreshCw} onClick={loadData}>
+            Refresh
           </Button>
-          <Button
-            variant="primary"
-            size="md"
-            icon={Plus}
-            onClick={() => setIsModalOpen(true)}
-            className="font-bold shadow-sm"
-          >
-            New Purchase Order
+          <Button variant="primary" icon={Plus} onClick={() => setIsModalOpen(true)}>
+            New purchase order
           </Button>
         </div>
       </div>
 
       {/* Purchases Table Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
           data={paginatedPurchases}
@@ -244,11 +243,11 @@ export function Purchases() {
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex justify-between items-center text-xs">
               <div>
                 <span className="text-slate-500">Order Status:</span>
-                <span className="ml-2 font-bold uppercase">{viewingPurchase.status}</span>
+                <span className="ml-2 font-semibold uppercase">{viewingPurchase.status}</span>
               </div>
               <div>
                 <span className="text-slate-500">Total:</span>
-                <span className="ml-2 font-bold text-slate-900 text-sm">
+                <span className="ml-2 font-semibold text-slate-900 text-sm">
                   {formatCurrency(viewingPurchase.total, currencySymbol)}
                 </span>
               </div>
@@ -257,7 +256,7 @@ export function Purchases() {
             {/* Items list */}
             <div className="border border-slate-200 rounded-xl overflow-hidden">
               <table className="w-full text-xs text-left">
-                <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                <thead className="bg-slate-100 text-slate-600 font-semibold border-b border-slate-200">
                   <tr>
                     <th className="p-2.5">Product</th>
                     <th className="p-2.5 text-center">Qty</th>
@@ -269,14 +268,14 @@ export function Purchases() {
                   {viewingPurchase.items && viewingPurchase.items.length > 0 ? (
                     viewingPurchase.items.map((it, idx) => (
                       <tr key={idx}>
-                        <td className="p-2.5 font-bold text-slate-800">{it.productName}</td>
+                        <td className="p-2.5 font-semibold text-slate-800">{it.productName}</td>
                         <td className="p-2.5 text-center font-semibold">
                           {it.quantity}
                         </td>
                         <td className="p-2.5 text-right font-mono">
                           {formatCurrency(it.unitCost, currencySymbol)}
                         </td>
-                        <td className="p-2.5 text-right font-mono font-bold text-slate-900">
+                        <td className="p-2.5 text-right font-mono font-semibold text-slate-900">
                           {formatCurrency(it.lineTotal, currencySymbol)}
                         </td>
                       </tr>

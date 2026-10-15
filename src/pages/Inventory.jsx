@@ -7,7 +7,7 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { formatDate } from '../utils/formatters';
 import { exportToCsv } from '../utils/exportCsv';
-import { ArrowLeftRight, Download, Filter, RefreshCw } from 'lucide-react';
+import { Download, RefreshCw } from 'lucide-react';
 
 export function Inventory() {
   const { products } = useStore();
@@ -89,10 +89,10 @@ export function Inventory() {
       key: 'productId',
       render: (row) => (
         <div>
-          <span className="font-bold text-slate-800">
+          <span className="font-semibold text-slate-800">
             {prodMap[row.productId] || row.productId}
           </span>
-          <p className="text-[10px] text-slate-400 font-mono">{row.productId}</p>
+          <p className="text-xs text-slate-400 font-mono">{row.productId}</p>
         </div>
       ),
     },
@@ -120,7 +120,7 @@ export function Inventory() {
         const qty = Number(row.quantity);
         return (
           <span
-            className={`font-mono font-bold text-xs ${
+            className={`font-mono font-semibold text-xs ${
               qty > 0 ? 'text-emerald-700' : 'text-rose-600'
             }`}
           >
@@ -147,7 +147,7 @@ export function Inventory() {
             {row.reason || '—'}
           </span>
           {row.referenceId && (
-            <span className="text-[10px] text-slate-400 font-mono">
+            <span className="text-xs text-slate-400 font-mono">
               Ref: {row.referenceId}
             </span>
           )}
@@ -167,26 +167,26 @@ export function Inventory() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">
-            Inventory Movement History
+          <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">
+            Stock movements
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Complete audit trail of sales, purchases, adjustments, and returns in Google Sheets.
+          <p className="text-sm text-slate-500 mt-0.5">
+            Every sale, purchase, adjustment and return that changed stock.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" icon={RefreshCw} onClick={loadMovements}>
+          <Button variant="ghost" icon={RefreshCw} onClick={loadMovements}>
             Refresh
           </Button>
-          <Button variant="outline" size="sm" icon={Download} onClick={handleExportCsv}>
-            Export Audit Log
+          <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
+            Export
           </Button>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs flex flex-wrap items-center gap-3">
+      <div className="p-3 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-3">
         <div className="flex-1 min-w-[220px]">
           <select
             value={selectedProduct}
@@ -225,7 +225,7 @@ export function Inventory() {
       </div>
 
       {/* Movements Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
           data={paginatedMovements}

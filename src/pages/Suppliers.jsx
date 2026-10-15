@@ -8,8 +8,11 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
 import { Input } from '../components/common/Input';
+import { PageHeader } from '../components/common/Card';
+import { FormErrorSummary } from '../components/common/FormErrorSummary';
+import { useFormValidation, rules } from '../hooks/useFormValidation';
 import { SearchInput } from '../components/common/SearchInput';
-import { Truck, Plus, DollarSign, Edit, Phone, Mail, MapPin } from 'lucide-react';
+import { Plus, DollarSign, Edit, Phone, MapPin } from 'lucide-react';
 
 export function Suppliers() {
   const { currencySymbol, refreshAllData } = useStore();
@@ -37,6 +40,33 @@ export function Suppliers() {
     outstandingBalance: '0',
     status: 'ACTIVE',
   });
+
+  const v = useFormValidation(formData, {
+    name: (val) => {
+      const t = val.trim();
+      if (!t) return 'Supplier name is required';
+      if (t.length < 2) return 'Name must be at least 2 characters';
+      const dup = suppliers.find(
+        (s) => s.supplierId !== selectedSupplier?.supplierId && s.name?.trim().toLowerCase() === t.toLowerCase()
+      );
+      return dup ? 'A supplier with this name already exists' : '';
+    },
+    phone: rules.phone,
+    email: rules.email,
+    outstandingBalance: rules.nonNegative('Opening balance', { required: false }),
+  });
+
+  const payable = Number(paymentSupplier?.outstandingBalance) || 0;
+  const payV = useFormValidation(
+    { paymentAmount },
+    {
+      paymentAmount: (val) => {
+        const msg = rules.positive('Payment amount')(val);
+        if (msg) return msg;
+        return Number(val) > payable ? `More than the ${formatCurrency(payable, currencySymbol)} you owe` : '';
+      },
+    }
+  );
 
   const loadSuppliers = async () => {
     try {
@@ -76,6 +106,7 @@ export function Suppliers() {
       outstandingBalance: '0',
       status: 'ACTIVE',
     });
+    v.reset();
     setIsSupplierModalOpen(true);
   };
 
@@ -90,25 +121,24 @@ export function Suppliers() {
       outstandingBalance: String(supp.outstandingBalance || '0'),
       status: supp.status || 'ACTIVE',
     });
+    v.reset();
     setIsSupplierModalOpen(true);
   };
 
   const handleSaveSupplier = async (e) => {
     e.preventDefault();
-    if (!formData.name.trim()) {
-      showToast('Supplier name is required', 'warning');
-      return;
-    }
+    if (!v.validate()) return;
 
     try {
       setIsSubmitting(true);
       const res = await api.saveSupplier({
         supplierId: selectedSupplier?.supplierId,
         ...formData,
+        name: formData.name.trim(),
       });
 
       if (res.success) {
-        showToast(selectedSupplier ? 'Supplier updated' : 'Supplier added', 'success');
+        showToast(selectedSupplier ? `${formData.name.trim()} updated` : `${formData.name.trim()} added`, 'success');
         await loadSuppliers();
         setIsSupplierModalOpen(false);
       } else {
@@ -123,11 +153,8 @@ export function Suppliers() {
 
   const handleRecordPayment = async (e) => {
     e.preventDefault();
+    if (!payV.validate()) return;
     const amt = parseFloat(paymentAmount) || 0;
-    if (amt <= 0) {
-      showToast('Payment amount must be greater than zero', 'warning');
-      return;
-    }
 
     try {
       setIsSubmitting(true);
@@ -155,19 +182,17 @@ export function Suppliers() {
 
   const columns = [
     {
-      header: 'Supplier & Contact',
+      header: 'Supplier',
       key: 'name',
       render: (row) => (
         <div>
-          <span className="font-bold text-slate-900 leading-snug">{row.name}</span>
-          {row.contactPerson && (
-            <p className="text-xs text-slate-500 mt-0.5">Contact: {row.contactPerson}</p>
-          )}
+          <span className="font-medium text-slate-900 leading-snug">{row.name}</span>
+          {row.contactPerson && <p className="text-xs text-slate-500 mt-0.5">{row.contactPerson}</p>}
         </div>
       ),
     },
     {
-      header: 'Contact Details',
+      header: 'Contact',
       key: 'phone',
       render: (row) => (
         <div className="space-y-0.5 text-xs text-slate-600">
@@ -187,15 +212,13 @@ export function Suppliers() {
       ),
     },
     {
-      header: 'Outstanding Balance',
+      header: 'Payable',
       key: 'outstandingBalance',
       render: (row) => {
         const bal = Number(row.outstandingBalance) || 0;
         return (
           <span
-            className={`font-mono font-bold text-sm ${
-              bal > 0 ? 'text-rose-700' : 'text-emerald-700'
-            }`}
+            className={`tabular font-semibold text-sm ${bal > 0 ? 'text-amber-700' : 'text-slate-500'}`}
           >
             {formatCurrency(bal, currencySymbol)}
           </span>
@@ -225,9 +248,10 @@ export function Suppliers() {
               onClick={() => {
                 setPaymentSupplier(row);
                 setPaymentAmount(String(row.outstandingBalance));
+                setPaymentNotes('');
+                payV.reset();
                 setIsPaymentModalOpen(true);
               }}
-              className="text-xs px-2 py-1 text-emerald-700 border-emerald-300 hover:bg-emerald-50"
             >
               Pay
             </Button>
@@ -237,7 +261,6 @@ export function Suppliers() {
             size="sm"
             icon={Edit}
             onClick={() => handleOpenEdit(row)}
-            className="text-xs px-2 py-1"
           >
             Edit
           </Button>
@@ -247,102 +270,126 @@ export function Suppliers() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-black text-slate-900 tracking-tight">Suppliers Directory</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Manage vendor contacts, wholesale distributors, and track outstanding payables.
-          </p>
-        </div>
-
-        <Button variant="primary" size="md" icon={Plus} onClick={handleOpenAdd} className="font-bold">
-          Add Supplier
-        </Button>
-      </div>
+      <PageHeader
+        title="Suppliers"
+        description="Vendors, distributors and what you owe them."
+        actions={
+          <Button variant="primary" icon={Plus} onClick={handleOpenAdd}>
+            Add supplier
+          </Button>
+        }
+      />
 
       {/* Search */}
-      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs flex items-center gap-3">
+      <div className="flex items-center gap-3">
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search suppliers by name, phone or market..."
+          placeholder="Search by name, phone or market"
           className="max-w-md w-full"
         />
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        <Table columns={columns} data={filteredSuppliers} isLoading={isLoading} keyField="supplierId" />
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <Table
+          columns={columns}
+          data={filteredSuppliers}
+          isLoading={isLoading}
+          keyField="supplierId"
+          emptyMessage={search ? `No suppliers match "${search}"` : 'No suppliers yet'}
+          emptyDescription={search ? 'Try a different search.' : 'Add the distributors you buy stock from.'}
+          emptyAction={!search && <Button size="sm" icon={Plus} onClick={handleOpenAdd}>Add supplier</Button>}
+        />
       </div>
 
       {/* Add / Edit Supplier Modal */}
       <Modal
         isOpen={isSupplierModalOpen}
         onClose={() => setIsSupplierModalOpen(false)}
-        title={selectedSupplier ? 'Edit Supplier' : 'Add New Supplier'}
+        title={selectedSupplier ? 'Edit supplier' : 'New supplier'}
+        subtitle={selectedSupplier ? selectedSupplier.name : undefined}
         maxWidth="max-w-lg"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setIsSupplierModalOpen(false)} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" form="supplier-form" variant="primary" isLoading={isSubmitting}>
+              {selectedSupplier ? 'Save changes' : 'Add supplier'}
+            </Button>
+          </>
+        }
       >
-        <form onSubmit={handleSaveSupplier} className="space-y-4">
+        <form id="supplier-form" ref={v.formRef} onSubmit={handleSaveSupplier} noValidate className="space-y-4">
+          <FormErrorSummary validation={v} />
           <Input
-            label="Company / Agency Name *"
+            label="Company name *"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             placeholder="e.g. National Wholesale Distributors"
-            required
             autoFocus
+            {...v.field('name')}
           />
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label="Contact Person"
+              label="Contact person"
               value={formData.contactPerson}
               onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
               placeholder="e.g. Haji Farooq"
+              optional
             />
             <Input
-              label="Phone Number"
+              label="Phone number"
+              type="tel"
+              inputMode="tel"
               value={formData.phone}
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-              placeholder="+92 301 5551122"
+              placeholder="0301 5551122"
+              optional
+              className="tabular"
+              {...v.field('phone')}
+              isValid={v.field('phone').isValid && !!formData.phone}
             />
           </div>
 
           <Input
-            label="Email Address"
+            label="Email"
             type="email"
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
             placeholder="orders@vendor.pk"
+            optional
+            {...v.field('email')}
+            isValid={v.field('email').isValid && !!formData.email}
           />
 
           <Input
-            label="Warehouse / Market Address"
+            label="Address"
             value={formData.address}
             onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-            placeholder="e.g. Badami Bagh Wholesale Market, Lahore"
+            placeholder="e.g. Badami Bagh wholesale market, Lahore"
+            optional
           />
 
           {!selectedSupplier && (
             <Input
-              label={`Initial Outstanding Balance (${currencySymbol})`}
+              label="Opening balance you owe"
               type="number"
+              inputMode="decimal"
               step="any"
+              min="0"
               value={formData.outstandingBalance}
               onChange={(e) => setFormData({ ...formData, outstandingBalance: e.target.value })}
               placeholder="0.00"
+              suffix={currencySymbol}
+              className="tabular"
+              {...v.field('outstandingBalance')}
             />
           )}
-
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-            <Button variant="outline" size="sm" onClick={() => setIsSupplierModalOpen(false)} disabled={isSubmitting}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting}>
-              Save Supplier
-            </Button>
-          </div>
         </form>
       </Modal>
 
@@ -351,36 +398,46 @@ export function Suppliers() {
         <Modal
           isOpen={isPaymentModalOpen}
           onClose={() => setIsPaymentModalOpen(false)}
-          title="Record Supplier Payment"
-          subtitle={`Supplier: ${paymentSupplier.name} • Current Balance: ${formatCurrency(paymentSupplier.outstandingBalance, currencySymbol)}`}
+          title="Pay supplier"
+          subtitle={`You owe ${paymentSupplier.name} ${formatCurrency(paymentSupplier.outstandingBalance, currencySymbol)}`}
           maxWidth="max-w-md"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmitting}>
+                Cancel
+              </Button>
+              <Button type="submit" form="supplier-payment-form" variant="primary" isLoading={isSubmitting} icon={DollarSign}>
+                Record payment
+              </Button>
+            </>
+          }
         >
-          <form onSubmit={handleRecordPayment} className="space-y-4">
+          <form id="supplier-payment-form" ref={payV.formRef} onSubmit={handleRecordPayment} noValidate className="space-y-4">
             <Input
-              label={`Payment Amount (${currencySymbol}) *`}
+              label="Amount paid *"
               type="number"
+              inputMode="decimal"
               step="any"
               value={paymentAmount}
               onChange={(e) => setPaymentAmount(e.target.value)}
-              required
+              suffix={currencySymbol}
+              className="tabular"
               autoFocus
+              hint={
+                Number(paymentAmount) > 0 && Number(paymentAmount) <= payable
+                  ? `Remaining after this: ${formatCurrency(payable - Number(paymentAmount), currencySymbol)}`
+                  : undefined
+              }
+              {...payV.field('paymentAmount')}
             />
 
             <Input
-              label="Payment Reference / Cheque # / Bank"
+              label="Reference, cheque # or bank"
               value={paymentNotes}
               onChange={(e) => setPaymentNotes(e.target.value)}
-              placeholder="e.g. Online transfer # TXN-1122"
+              placeholder="e.g. Transfer TXN-1122"
+              optional
             />
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <Button variant="outline" size="sm" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmitting}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="primary" size="sm" isLoading={isSubmitting} icon={DollarSign}>
-                Record Payment
-              </Button>
-            </div>
           </form>
         </Modal>
       )}
