@@ -14,6 +14,7 @@ import { SearchInput } from '../components/common/SearchInput';
 import { PageHeader } from '../components/common/Card';
 import { ProductModal } from '../components/inventory/ProductModal';
 import { StockAdjustModal } from '../components/inventory/StockAdjustModal';
+import { ProductImportModal } from '../components/inventory/ProductImportModal';
 import {
   Plus,
   Download,
@@ -22,6 +23,7 @@ import {
   Barcode,
   Trash2,
   ShoppingBag,
+  Upload,
 } from 'lucide-react';
 
 export function Products() {
@@ -53,6 +55,7 @@ export function Products() {
 
   // Modals state
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [selectedProductForEdit, setSelectedProductForEdit] = useState(null);
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const [selectedProductForStock, setSelectedProductForStock] = useState(null);
@@ -338,6 +341,9 @@ export function Products() {
                 Create PO ({lowStock.length} low)
               </Button>
             )}
+            <Button variant="secondary" icon={Upload} onClick={() => setIsImportOpen(true)}>
+              Import
+            </Button>
             <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
               Export
             </Button>
@@ -437,6 +443,8 @@ export function Products() {
         onClose={() => setIsProductModalOpen(false)}
         product={selectedProductForEdit}
       />
+
+      <ProductImportModal isOpen={isImportOpen} onClose={() => setIsImportOpen(false)} />
 
       <StockAdjustModal
         isOpen={isStockModalOpen}
