@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 const FOCUSABLE =
@@ -97,7 +98,9 @@ export function Modal({
 
   if (!isRendered) return null;
 
-  return (
+  // Rendered into <body>: an animated (transformed) page wrapper would otherwise
+  // trap position:fixed and cut the dialog off.
+  return createPortal(
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/45 ${
         isClosing ? 'animate-out fade-out' : 'animate-in fade-in duration-200'
@@ -149,6 +152,7 @@ export function Modal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
