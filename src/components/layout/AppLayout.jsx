@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { IdleLock } from '../common/LockScreen';
 
 export function AppLayout() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -35,7 +36,7 @@ export function AppLayout() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden">
         <Header onToggleMobileNav={() => setMobileNavOpen(true)} />
-        <main className={`flex-1 min-h-0 ${isPos ? 'p-2 sm:p-3 overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
+        <main className={`flex-1 min-h-0 ${isPos ? 'p-2 sm:p-3 overflow-y-auto lg:overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
           <div
             key={location.pathname}
             className={`page-enter ${
@@ -46,6 +47,7 @@ export function AppLayout() {
           </div>
         </main>
       </div>
+      <IdleLock />
     </div>
   );
 }

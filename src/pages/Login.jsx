@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { api } from '../services/api';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useStore } from '../context/StoreContext';
@@ -9,8 +8,6 @@ import { useFormValidation } from '../hooks/useFormValidation';
 import {
   Lock,
   User,
-  ShieldCheck,
-  ShoppingCart,
   AlertCircle,
   ArrowRight,
   Barcode,
@@ -18,12 +15,29 @@ import {
   Boxes,
 } from 'lucide-react';
 
+function readRememberedUsername() {
+  try {
+    return localStorage.getItem('gsms_remember_username') || '';
+  } catch {
+    return '';
+  }
+}
+
+function hasLoggedInBefore() {
+  try {
+    return localStorage.getItem('gsms_session_only') !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function Login() {
-  const { login, quickLogin, isLoadingAuth } = useAuth();
-  const { settings, isLiveBackend } = useStore();
+  const { login, isLoadingAuth } = useAuth();
+  const { settings } = useStore();
   const navigate = useNavigate();
 
-  const [form, setForm] = useState({ username: '', password: '' });
+  const [form, setForm] = useState(() => ({ username: readRememberedUsername(), password: '' }));
+  const [remember, setRemember] = useState(() => Boolean(readRememberedUsername()) || !hasLoggedInBefore());
   const [error, setError] = useState('');
 
   const v = useFormValidation(form, {
@@ -31,8 +45,6 @@ export function Login() {
     password: (val) => (!val ? 'Enter your password or PIN' : ''),
   });
 
-  // Demo credentials only exist in Google Sheets / local demo mode, never in the Supabase database
-  const showDemoLogins = api.backendName !== 'Supabase';
   const storeName = settings.storeName || 'Bismillah Grocery';
 
   const goHome = (user) => navigate(user.role === 'CASHIER' ? '/pos' : '/');
@@ -47,26 +59,11 @@ export function Login() {
     setError('');
     if (!v.validate()) return;
 
-    const res = await login(form.username.trim(), form.password.trim());
+    const res = await login(form.username.trim(), form.password.trim(), remember);
     if (res.success) {
       goHome(res.user);
     } else {
       setError(res.error || 'Invalid username or password');
-    }
-  };
-
-  const handleQuick = async (role) => {
-    setError('');
-    setForm({
-      username: role === 'admin' ? 'admin' : 'cashier1',
-      password: role === 'admin' ? 'admin123' : '1234',
-    });
-
-    const res = await quickLogin(role);
-    if (res.success) {
-      goHome(res.user);
-    } else {
-      setError(res.error || 'Login failed');
     }
   };
 
@@ -110,7 +107,7 @@ export function Login() {
         </div>
 
         <p className="relative text-xs text-brand-200">
-          {settings.tagline || 'POS & management system'} · {isLiveBackend ? `Connected to ${api.backendName}` : 'Local demo mode'}
+          {settings.tagline || 'POS & management system'}
         </p>
       </aside>
 
@@ -127,10 +124,6 @@ export function Login() {
           <h2 className="text-2xl font-semibold text-slate-900 tracking-tight">Sign in</h2>
           <p className="text-sm text-slate-500 mt-1">Use your staff username and password or PIN.</p>
 
-          <div className="mt-3 inline-flex items-center gap-2 text-xs text-slate-600">
-            <span className={`w-2 h-2 rounded-full ${isLiveBackend ? 'bg-brand-500' : 'bg-amber-500'}`} />
-            {isLiveBackend ? `Connected to ${api.backendName}` : 'Local demo mode'}
-          </div>
 
           {error && (
             <div
@@ -148,7 +141,7 @@ export function Login() {
               icon={User}
               value={form.username}
               onChange={update('username')}
-              placeholder="e.g. admin or cashier1"
+              placeholder="Your staff username"
               autoComplete="username"
               autoFocus
               {...v.field('username')}
@@ -166,44 +159,24 @@ export function Login() {
               isValid={false}
             />
 
+            <label className="flex items-center gap-2 text-[13px] text-slate-700 select-none cursor-pointer">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                className="w-4 h-4 accent-brand-600"
+              />
+              Remember me on this computer
+            </label>
+
             <Button type="submit" variant="primary" size="lg" isLoading={isLoadingAuth} className="w-full">
               Sign in
               <ArrowRight className="w-4 h-4" />
             </Button>
           </form>
 
-          {showDemoLogins && (
-            <div className="mt-8">
-              <div className="flex items-center gap-3 text-xs text-slate-400">
-                <span className="h-px flex-1 bg-slate-200" />
-                Demo accounts
-                <span className="h-px flex-1 bg-slate-200" />
-              </div>
 
-              <div className="grid grid-cols-2 gap-2 mt-4">
-                {[
-                  { role: 'admin', Icon: ShieldCheck, title: 'Store manager', cred: 'admin / admin123' },
-                  { role: 'cashier', Icon: ShoppingCart, title: 'Cashier', cred: 'cashier1 / 1234' },
-                ].map(({ role, Icon, title, cred }) => (
-                  <button
-                    key={role}
-                    type="button"
-                    onClick={() => handleQuick(role)}
-                    disabled={isLoadingAuth}
-                    className="p-3 rounded-xl border border-slate-200 bg-white hover:border-brand-300 hover:bg-brand-50/50 transition-colors text-left group disabled:opacity-60"
-                  >
-                    <div className="flex items-center gap-2 text-[13px] font-medium text-slate-900">
-                      <Icon className="w-4 h-4 text-slate-400 group-hover:text-brand-600 transition-colors" strokeWidth={1.8} />
-                      {title}
-                    </div>
-                    <p className="text-xs text-slate-500 mt-1 font-mono">{cred}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <p className="text-xs text-slate-400 mt-10">Grocery Store Management System · {api.backendName}</p>
+          <p className="text-xs text-slate-400 mt-10">Grocery Store Management System</p>
         </div>
       </main>
     </div>

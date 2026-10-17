@@ -370,7 +370,47 @@
     color: black !important;
   }
 
+  /* printElement(): only the copy inside #print-root is printed */
+  body.printing > *:not(#print-root) {
+    display: none !important;
+  }
+  body.printing #print-root,
+  body.printing #print-root * {
+    visibility: visible !important;
+  }
+  body.printing #print-root {
+    display: block !important;
+    position: static;
+    width: 100%;
+    background: white !important;
+    color: black !important;
+  }
+  body.printing #print-root > * {
+    box-shadow: none !important;
+    border: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  body.printing #print-root .no-print,
+  body.printing #print-root .no-print * {
+    display: none !important;
+  }
+  body.printing #print-root table {
+    font-size: 11px;
+  }
+  body.printing #print-root .print-only {
+    display: block !important;
+  }
+
   @page {
     margin: 5mm;
   }
+}
+
+.print-only {
+  display: none;
+}
+
+#print-root {
+  display: none;
 }

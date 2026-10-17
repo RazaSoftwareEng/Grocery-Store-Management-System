@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { todayStr, addDays } from '../utils/dates';
+import { printElement } from '../utils/print';
+import { ReportsExtras } from '../components/reports/ReportsExtras';
 import { useStore } from '../context/StoreContext';
 import { api } from '../services/api';
 import { formatCurrency } from '../utils/formatters';
@@ -6,9 +9,7 @@ import { exportToCsv } from '../utils/exportCsv';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Table } from '../components/common/Table';
-import {
-  Download,
-} from 'lucide-react';
+import { Download, Printer } from 'lucide-react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -27,8 +28,9 @@ const PIE_COLORS = ['#059669', '#0284c7', '#d97706', '#9333ea', '#e11d48', '#647
 export function Reports() {
   const { currencySymbol } = useStore();
 
-  const today = new Date().toISOString().slice(0, 10);
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const today = todayStr();
+  const thirtyDaysAgo = addDays(today, -29);
+  const pageRef = useRef(null);
 
   const [startDate, setStartDate] = useState(thirtyDaysAgo);
   const [endDate, setEndDate] = useState(today);
@@ -51,11 +53,12 @@ export function Reports() {
 
   useEffect(() => {
     loadReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleQuickPreset = (days) => {
-    const end = new Date().toISOString().slice(0, 10);
-    const start = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    const end = todayStr();
+    const start = addDays(end, -Math.max(0, days - 1));
     setStartDate(start);
     setEndDate(end);
     loadReports(start, end);
@@ -71,6 +74,11 @@ export function Reports() {
       { Metric: 'Estimated Net Profit', Amount: reportData.estimatedNetProfit },
       { Metric: 'Discounts Given', Amount: reportData.totalDiscount },
       { Metric: 'Sales Tax Collected', Amount: reportData.totalTax },
+      { Metric: 'Returns', Amount: reportData.totalReturns },
+      { Metric: 'Cash received (sales paid now - refunds + khata collected)', Amount: reportData.cashFlow?.cashReceived },
+      { Metric: 'Credit (khata) sales', Amount: reportData.cashFlow?.creditSales },
+      { Metric: 'Supplier payments', Amount: reportData.cashFlow?.supplierPayments },
+      { Metric: 'Net cash flow', Amount: reportData.cashFlow?.netCashFlow },
       { Metric: 'Current Stock Cost Valuation', Amount: reportData.inventoryValuation?.costValue },
       { Metric: 'Current Stock Retail Valuation', Amount: reportData.inventoryValuation?.retailValue },
     ];
@@ -137,7 +145,7 @@ export function Reports() {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" ref={pageRef}>
       {/* Header & Date Range Controls */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 bg-white rounded-2xl border border-slate-200 shadow-xs">
         <div>
@@ -207,6 +215,9 @@ export function Reports() {
             className="text-xs py-1.5"
           >
             Export
+          </Button>
+          <Button variant="outline" size="sm" icon={Printer} onClick={() => printElement(pageRef.current, { pageSize: 'A4' })} className="text-xs py-1.5 no-print">
+            Print / PDF
           </Button>
         </div>
       </div>
@@ -394,6 +405,7 @@ export function Reports() {
           emptyMessage="No sales data in selected period."
         />
       </Card>
+      <ReportsExtras data={reportData} startDate={startDate} endDate={endDate} />
     </div>
   );
 }

@@ -22,7 +22,10 @@ import {
 } from 'lucide-react';
 
 export function Users() {
-  const { users, refreshAllData, isLiveBackend } = useStore();
+  const { users, refreshAllData, settings } = useStore();
+  const [pin, setPin] = useState('');
+  const [isSavingPin, setIsSavingPin] = useState(false);
+  const defaultMax = settings.cashierMaxDiscountPercent ?? '10';
   const { currentUser } = useAuth();
   const { showToast } = useToast();
   const confirm = useConfirm();
@@ -38,6 +41,7 @@ export function Users() {
     role: 'CASHIER',
     password: '',
     status: 'ACTIVE',
+    perms: { canGiveDiscount: true, maxDiscountPercent: '', canReturn: false, canViewReports: false },
   });
 
   const v = useFormValidation(
@@ -57,7 +61,7 @@ export function Users() {
       },
       password: (val, all) => {
         if (!val) return all.isNew ? 'Set a password or PIN' : '';
-        return val.length < 4 ? 'Use at least 4 characters' : '';
+        return val.length < 6 ? 'Use at least 6 characters' : '';
       },
       role: (val) => (!val ? 'Choose a role' : ''),
     }
@@ -97,6 +101,7 @@ export function Users() {
       role: 'CASHIER',
       password: '',
       status: 'ACTIVE',
+      perms: { canGiveDiscount: true, maxDiscountPercent: '', canReturn: false, canViewReports: false },
     });
     v.reset();
     setIsModalOpen(true);
@@ -111,6 +116,12 @@ export function Users() {
       role: u.role || 'CASHIER',
       password: '', // Blank unless changing
       status: u.status || 'ACTIVE',
+      perms: {
+        canGiveDiscount: u.permissions?.canGiveDiscount ?? true,
+        maxDiscountPercent: u.permissions?.maxDiscountPercent ?? '',
+        canReturn: Boolean(u.permissions?.canReturn),
+        canViewReports: Boolean(u.permissions?.canViewReports),
+      },
     });
     v.reset();
     setIsModalOpen(true);
@@ -154,6 +165,12 @@ export function Users() {
       const payload = {
         ...formData,
         username: formData.username.trim().toLowerCase(),
+        permissions: {
+          canGiveDiscount: formData.perms.canGiveDiscount,
+          maxDiscountPercent: formData.perms.maxDiscountPercent === '' ? null : Number(formData.perms.maxDiscountPercent),
+          canReturn: formData.perms.canReturn,
+          canViewReports: formData.perms.canViewReports,
+        },
         fullName: formData.fullName.trim() || formData.username.trim(),
       };
 
@@ -222,7 +239,8 @@ export function Users() {
       key: 'lastLogin',
       render: (row) => (
         <span className="text-xs text-slate-500">
-          {row.lastLogin ? formatDate(row.lastLogin) : 'Never'}
+          {row.lastLoginAt ? formatDate(row.lastLoginAt) : 'Never'}
+          {row.mustChangePassword && <span className="block text-amber-700">Must change password</span>}
         </span>
       ),
     },
@@ -269,6 +287,29 @@ export function Users() {
           </Button>
         }
       />
+
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setIsSavingPin(true);
+          const res = await api.setManagerPin(pin);
+          setIsSavingPin(false);
+          if (res.success) {
+            setPin('');
+            showToast('Manager PIN saved', 'success');
+          } else showToast(res.error, 'error');
+        }}
+        className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-end gap-3"
+      >
+        <div className="flex-1 min-w-[220px]">
+          <p className="text-[13px] font-semibold text-slate-900">My manager PIN</p>
+          <p className="text-xs text-slate-500">
+            Typed at the counter to approve discounts over {defaultMax}%, over-limit khata and cashier returns. 4 to 8 digits.
+          </p>
+        </div>
+        <Input type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="New PIN" aria-label="New manager PIN" containerClassName="w-36" />
+        <Button type="submit" variant="secondary" isLoading={isSavingPin} disabled={pin.length < 4}>Save PIN</Button>
+      </form>
 
       {/* Users Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
@@ -356,6 +397,27 @@ export function Users() {
               onChange={(e) => setFormData({ ...formData, status: e.target.value })}
             />
           )}
+
+          {formData.role === 'CASHIER' && (
+            <fieldset className="p-3 rounded-xl border border-slate-200 space-y-2 text-[13px]">
+              <legend className="px-1 text-xs font-medium text-slate-500">Cashier permissions</legend>
+              {[
+                ['canGiveDiscount', 'Can give discounts'],
+                ['canReturn', 'Can return items without manager PIN (own bills)'],
+                ['canViewReports', 'Can view reports'],
+              ].map(([k, label]) => (
+                <label key={k} className="flex items-center gap-2">
+                  <input type="checkbox" checked={Boolean(formData.perms[k])}
+                    onChange={(e) => setFormData({ ...formData, perms: { ...formData.perms, [k]: e.target.checked } })} />
+                  {label}
+                </label>
+              ))}
+              <Input label="Max discount %" type="number" min="0" max="100" value={formData.perms.maxDiscountPercent}
+                onChange={(e) => setFormData({ ...formData, perms: { ...formData.perms, maxDiscountPercent: e.target.value } })}
+                placeholder={`Store default (${defaultMax}%)`} hint="Above this a manager PIN is needed" />
+            </fieldset>
+          )}
+          <p className="text-xs text-slate-500">A password you set here is temporary: the user must choose a new one at next sign-in.</p>
 
         </form>
       </Modal>

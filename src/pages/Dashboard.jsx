@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
+import { getStoreTimeZone } from '../utils/dates';
 import { formatCurrency, formatDate } from '../utils/formatters';
 import { Card } from '../components/common/Card';
 import { EmptyState } from '../components/common/Table';
@@ -40,9 +41,7 @@ import {
 export function Dashboard() {
   const {
     currencySymbol,
-    refreshAllData,
     dashboardStats,
-    isLiveBackend,
     quickAdjustStock,
   } = useStore();
   const { currentUser, isAdmin } = useAuth();
@@ -95,7 +94,7 @@ export function Dashboard() {
     }
   };
 
-  const hour = new Date().getHours();
+  const hour = Number(new Date().toLocaleString('en-US', { timeZone: getStoreTimeZone(), hour: 'numeric', hourCycle: 'h23' }));
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   const firstName = (currentUser?.fullName || currentUser?.username || 'there').split(' ')[0];
   const lowCount = Number(stats?.lowStockCount) || 0;
@@ -157,12 +156,7 @@ export function Dashboard() {
             {greeting}, {firstName}
           </h1>
           <p className="text-sm text-slate-500 mt-0.5 flex items-center gap-2">
-            {new Date().toLocaleDateString('en-PK', { weekday: 'long', day: 'numeric', month: 'long' })}
-            <span className="text-slate-300">·</span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${isLiveBackend ? 'bg-brand-500' : 'bg-amber-500'}`} />
-              {isLiveBackend ? `${api.backendName} connected` : 'Local mode'}
-            </span>
+            {new Date().toLocaleDateString('en-PK', { timeZone: getStoreTimeZone(), weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
         <Button variant="primary" icon={ShoppingCart} onClick={() => navigate('/pos')}>
@@ -329,6 +323,47 @@ export function Dashboard() {
         </Card>
       </div>
 
+      {/* This month */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {[
+          { label: 'Expenses this month', value: stats?.totalExpenses, to: '/expenses' },
+          { label: 'Customer khata to collect', value: stats?.customerReceivables, to: '/customers' },
+          { label: 'Owed to suppliers', value: stats?.supplierPayables, to: '/suppliers' },
+        ].map((x) => (
+          <Link key={x.label} to={x.to} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs hover:border-slate-300">
+            <p className="text-[13px] text-slate-500">{x.label}</p>
+            <p className="text-lg font-semibold text-slate-900 tabular">{money(x.value)}</p>
+          </Link>
+        ))}
+      </div>
+
+      {Number(stats?.expiringCount) > 0 && (
+        <Card
+          title="Expiring soon"
+          subtitle={`Expired or expiring within ${stats.expiryAlertDays} days`}
+          bodyClassName="p-0"
+          actions={
+            <Link to="/products?filter=expiring" className="text-[13px] text-brand-600 hover:text-brand-700 font-medium">
+              View all ({stats.expiringCount})
+            </Link>
+          }
+        >
+          <ul className="divide-y divide-slate-100">
+            {stats.expiringItems.map((item) => (
+              <li key={item.productId} className="px-5 py-2.5 flex items-center justify-between gap-3 text-[13px]">
+                <span className="font-medium text-slate-900 truncate">{item.name}</span>
+                <span className="text-xs tabular shrink-0 text-slate-500">
+                  {item.currentStock} {item.unit} ·{' '}
+                  <span className={item.daysLeft < 0 ? 'text-rose-600 font-semibold' : 'text-amber-700 font-semibold'}>
+                    {item.daysLeft < 0 ? `expired ${-item.daysLeft} days ago` : item.daysLeft === 0 ? 'expires today' : `${item.daysLeft} days left`}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       {/* Low stock & recent sales */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card
@@ -444,6 +479,7 @@ export function Dashboard() {
         isOpen={isReceiptModalOpen}
         onClose={() => setIsReceiptModalOpen(false)}
         saleData={selectedSaleDetails}
+        isReprint
       />
     </div>
   );

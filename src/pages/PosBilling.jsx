@@ -1,34 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
-import { useConfirm } from '../context/ConfirmContext';
 import { useAuth } from '../context/AuthContext';
-import { ProductCard } from '../components/pos/ProductCard';
-import { CartItem } from '../components/pos/CartItem';
 import { CustomerSelectModal } from '../components/pos/CustomerSelectModal';
 import { PaymentModal } from '../components/pos/PaymentModal';
 import { ReceiptModal } from '../components/pos/ReceiptModal';
-import { SearchInput } from '../components/common/SearchInput';
-import { Button, Kbd } from '../components/common/Button';
-import { EmptyState } from '../components/common/Table';
-import { formatCurrency } from '../utils/formatters';
+import { HeldBillsModal } from '../components/pos/HeldBillsModal';
+import { OpenShiftPanel } from '../components/pos/OpenShiftPanel';
+import { ManagerPinModal } from '../components/common/ManagerPinModal';
+import { Button } from '../components/common/Button';
+import { formatCurrency, formatNumber, isWeightedUnit, round2 } from '../utils/formatters';
 import { createBarcodeListener } from '../utils/barcode';
 import { api } from '../services/api';
-import {
-  ShoppingCart,
-  Trash2,
-  User,
-  CreditCard,
-  Barcode,
-  ArrowRight,
-  Database,
-} from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Search, Trash2, PauseCircle, ListRestart, CheckCircle2, Minus, Plus, X, User } from 'lucide-react';
 
+/**
+ * Simple counter billing: search -> bill table -> total, received, change -> complete & print.
+ * Card / khata / split payments open the full payment dialog.
+ */
 export function PosBilling() {
   const {
     products,
-    categories,
     cart,
     cartSubtotal,
     cartTax,
@@ -39,502 +31,489 @@ export function PosBilling() {
     setActiveCustomer,
     addToCart,
     updateCartQty,
-    updateCartItemDiscount,
     removeFromCart,
     clearCart,
+    loadCart,
     currencySymbol,
     settings,
-    isLiveBackend,
-    refreshAllData,
+    currentShift,
+    refreshProducts,
+    refreshShift,
   } = useStore();
-
   const { showToast } = useToast();
-  const confirm = useConfirm();
   const { isAdmin } = useAuth();
+  const f = (n) => formatCurrency(n, currencySymbol);
 
   const [search, setSearch] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const [sel, setSel] = useState(0);
+  const [showSuggest, setShowSuggest] = useState(false);
+  const [received, setReceived] = useState('');
+  const [isCompleting, setIsCompleting] = useState(false);
+  const [approval, setApproval] = useState(null);
+  const [lastAddedId, setLastAddedId] = useState(null);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [completedSale, setCompletedSale] = useState(null);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [isHeldOpen, setIsHeldOpen] = useState(false);
+  const [heldCount, setHeldCount] = useState(0);
+  const [isHolding, setIsHolding] = useState(false);
+  const [isEditingDiscount, setIsEditingDiscount] = useState(false);
+  const [discountInput, setDiscountInput] = useState('');
 
-  // Mobile View Toggle: 'catalog' | 'cart'
-  const [mobileTab, setMobileTab] = useState('catalog');
+  const searchRef = useRef(null);
+  const receivedRef = useRef(null);
 
-  const searchInputRef = useRef(null);
+  const focusSearch = () => setTimeout(() => searchRef.current?.focus(), 0);
 
-  // Hardware Barcode Scanner Listener
-  useEffect(() => {
-    const cleanup = createBarcodeListener((scannedBarcode) => {
-      const match = products.find(
-        (p) =>
-          p.status !== 'INACTIVE' &&
-          (p.barcode === scannedBarcode || p.sku === scannedBarcode)
-      );
+  // --- product search ---
+  const q = search.trim().toLowerCase();
+  const suggestions = q
+    ? products
+        .filter((p) => p.status !== 'INACTIVE')
+        .filter((p) => p.barcode === search.trim() || String(p.sku || '').toLowerCase() === q || p.name?.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q))
+        .slice(0, 8)
+    : [];
 
-      if (match) {
-        addToCart(match, 1);
-        setSearch('');
-        showToast(`Scanned: ${match.name}`, 'success');
-      } else {
-        showToast(`Barcode not recognized: ${scannedBarcode}`, 'warning');
+  const addProduct = (p) => {
+    addToCart(p, 1);
+    setLastAddedId(p.productId);
+    setSearch('');
+    setSel(0);
+    focusSearch();
+  };
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSel((s) => Math.min(s + 1, suggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSel((s) => Math.max(s - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation(); // the global scanner listener must not add it again
+      const t = search.trim();
+      if (!t) {
+        if (cart.length) receivedRef.current?.focus();
+        return;
       }
-    });
+      const exact = products.find((p) => p.status !== 'INACTIVE' && (p.barcode === t || String(p.sku || '').toLowerCase() === t.toLowerCase()));
+      const match = exact || suggestions[sel];
+      if (match) addProduct(match);
+      else showToast(`No product found for "${t}"`, 'warning');
+    } else if (e.key === 'Escape') {
+      setSearch('');
+    }
+  };
 
-    return cleanup;
+  // Hardware scanner while focus is elsewhere
+  useEffect(() => {
+    return createBarcodeListener((code) => {
+      const match = products.find((p) => p.status !== 'INACTIVE' && (p.barcode === code || p.sku === code));
+      if (match) addProduct(match);
+      else showToast(`Barcode not recognized: ${code}`, 'warning');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [products, addToCart, showToast]);
 
-  // Keyboard shortcuts (F2: search, F4: clear, F8: checkout)
+  // --- held bills ---
+  const refreshHeldCount = async () => {
+    const res = await api.getHeldBills();
+    if (res.success) setHeldCount(res.data.length);
+  };
+
   useEffect(() => {
-    function handleKeyDown(e) {
-      if (e.key === 'F2') {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      } else if (e.key === 'F4') {
-        e.preventDefault();
-        if (cart.length) clearCart();
-      } else if (e.key === 'F8') {
-        e.preventDefault();
-        if (cart.length) setIsPaymentModalOpen(true);
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cart, clearCart]);
+    refreshHeldCount();
+  }, []);
 
-  // Filter products by category and search
-  const filteredProducts = products.filter((p) => {
-    if (p.status === 'INACTIVE') return false;
-    if (selectedCategory !== 'ALL' && p.categoryId !== selectedCategory) return false;
-    if (!search.trim()) return true;
-
-    const q = search.toLowerCase();
-    return (
-      p.name?.toLowerCase().includes(q) ||
-      p.sku?.toLowerCase().includes(q) ||
-      p.barcode?.includes(q)
-    );
-  });
-
-  // Enter in the search box: add the exact barcode/SKU match, or the only matching product.
-  // Handles scanners typing into the focused search box as well as manual entry.
-  const handleSearchKeyDown = (e) => {
-    if (e.key !== 'Enter') return;
-    const q = search.trim();
-    if (!q) return;
-    e.preventDefault();
-    e.stopPropagation(); // the global scanner listener must not add it a second time
-
-    const exact = products.find(
-      (p) =>
-        p.status !== 'INACTIVE' &&
-        (p.barcode === q || String(p.sku || '').toLowerCase() === q.toLowerCase())
-    );
-    const match = exact || (filteredProducts.length === 1 ? filteredProducts[0] : null);
-
-    if (match) {
-      addToCart(match, 1);
-      setSearch('');
-      showToast(`Added: ${match.name}`, 'success');
-    } else if (filteredProducts.length > 1) {
-      showToast(`${filteredProducts.length} products match. Click the one you want.`, 'info');
-    } else {
-      showToast(`No product found for "${q}"`, 'warning');
-    }
+  const handleHold = async () => {
+    if (!cart.length) return;
+    const note = window.prompt('Note for this held bill (optional), e.g. customer name', activeCustomer?.customerId !== 'WALK-IN' ? activeCustomer?.name : '');
+    if (note === null) return;
+    setIsHolding(true);
+    const res = await api.holdBill({
+      cart: cart.map(({ productId, name, sku, barcode, unit, quantity, discount }) => ({ productId, name, sku, barcode, unit, quantity, discount })),
+      customer: activeCustomer,
+      billDiscount: cartDiscount,
+      note,
+    });
+    setIsHolding(false);
+    if (res.success) {
+      clearCart();
+      setReceived('');
+      showToast('Bill put on hold. Resume it from "Held".', 'success');
+      refreshHeldCount();
+      focusSearch();
+    } else showToast(res.error || 'Could not hold the bill', 'error');
   };
 
-  const handleReceiptClose = () => {
-    setIsReceiptModalOpen(false);
-    setTimeout(() => searchInputRef.current?.focus(), 0);
+  const handleResume = (bill) => {
+    loadCart(bill.cart, bill.billDiscount, bill.customer);
+    setIsHeldOpen(false);
+    setReceived('');
+    showToast('Held bill loaded. Prices refreshed from the current catalog.', 'info');
   };
 
-  const handleSaleSuccess = (saleRecord) => {
-    setCompletedSale(saleRecord);
+  // --- payment ---
+  const receivedNum = parseFloat(received);
+  const hasReceived = received.trim() !== '' && !Number.isNaN(receivedNum);
+  const change = hasReceived ? round2(receivedNum - cartTotal) : null;
+  const canComplete = cart.length > 0 && hasReceived && receivedNum >= cartTotal && !isCompleting;
+
+  const showReceipt = (data) => {
+    setCompletedSale(data);
     setIsReceiptModalOpen(true);
   };
 
-  const handleClearDummyData = async () => {
-    if (
-      !(await confirm({
-        title: 'Remove all sample data?',
-        message: 'Every demo product and sale is deleted so you can start with an empty catalog.',
-        confirmText: 'Remove sample data',
-        tone: 'danger',
-      }))
-    ) {
+  const completeCash = async (approvalToken = null) => {
+    if (!canComplete && !approvalToken) return;
+    setIsCompleting(true);
+    const res = await api.createSale({
+      customerId: activeCustomer?.customerId || 'WALK-IN',
+      items: cart,
+      discount: cartDiscount,
+      payments: [{ method: 'CASH', amount: receivedNum }],
+      approvalToken,
+    });
+    setIsCompleting(false);
+    if (res.success) {
+      clearCart();
+      setReceived('');
+      showReceipt(res.data);
+      refreshProducts();
+      refreshShift();
+    } else if (res.needsApproval) {
+      setApproval({ reason: res.error });
+    } else {
+      showToast(res.error || 'Could not complete the sale', 'error');
+    }
+  };
+
+  const applyDiscount = () => {
+    const v = parseFloat(discountInput);
+    if (discountInput.trim() !== '' && (Number.isNaN(v) || v < 0 || v > cartSubtotal)) {
+      showToast(`Discount must be between 0 and ${f(cartSubtotal)}`, 'warning');
       return;
     }
-    api.clearAllDummyData();
-    clearCart();
-    refreshAllData();
-    showToast('All dummy products removed. Store is clean.', 'success');
+    setCartDiscount(discountInput.trim() === '' ? 0 : v);
+    setIsEditingDiscount(false);
   };
 
-  const [isEditingBillDiscount, setIsEditingBillDiscount] = useState(false);
-  const [billDiscountInput, setBillDiscountInput] = useState('');
-  const billDiscountValue = parseFloat(billDiscountInput);
-  const billDiscountError =
-    billDiscountInput.trim() === ''
-      ? ''
-      : Number.isNaN(billDiscountValue)
-      ? 'Numbers only'
-      : billDiscountValue < 0
-      ? "Can't be negative"
-      : billDiscountValue > cartSubtotal
-      ? `Max ${formatCurrency(cartSubtotal, currencySymbol)}`
-      : '';
-
-  const applyBillDiscount = () => {
-    if (billDiscountError) return;
-    setCartDiscount(billDiscountInput.trim() === '' ? 0 : billDiscountValue);
-    setIsEditingBillDiscount(false);
-  };
-
-  const allowNegativeStock =
-    settings.allowNegativeStock === 'true' || settings.allowNegativeStock === true;
-
-  const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const activeCount = products.filter((p) => p.status !== 'INACTIVE').length;
-
-  const chip = (isOn) =>
-    `h-8 px-3 rounded-full text-[13px] font-medium border transition-colors whitespace-nowrap ${
-      isOn
-        ? 'bg-slate-900 border-slate-900 text-white'
-        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900'
-    }`;
+  if (currentShift === null && !isAdmin) {
+    return <OpenShiftPanel />;
+  }
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden gap-2">
-      {/* Local mode notice */}
-      {!isLiveBackend && isAdmin && (
-        <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl flex flex-wrap items-center justify-between gap-2 text-[13px] text-amber-900 shrink-0 animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <Database className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>
-              <span className="font-semibold">Local mode.</span> No database is connected yet, so sales are saved in this browser only.
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="xs" onClick={handleClearDummyData} className="text-amber-800 hover:bg-amber-100">
-              Clear samples
-            </Button>
-            <Link
-              to="/settings"
-              className="h-7 px-2.5 inline-flex items-center rounded-lg bg-amber-600 text-white text-xs font-medium hover:bg-amber-700 transition-colors"
-            >
-              Connect database
-            </Link>
-          </div>
-        </div>
-      )}
-
-      {/* Mobile tab switcher */}
-      <div className="lg:hidden grid grid-cols-2 p-1 gap-1 bg-slate-100 border border-slate-200 rounded-xl shrink-0 text-[13px] font-medium" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobileTab === 'catalog'}
-          onClick={() => setMobileTab('catalog')}
-          className={`h-8 rounded-lg transition-all ${
-            mobileTab === 'catalog' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
-          }`}
-        >
-          Products <span className="text-slate-400 tabular">({filteredProducts.length})</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mobileTab === 'cart'}
-          onClick={() => setMobileTab('cart')}
-          className={`h-8 rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-            mobileTab === 'cart' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
-          }`}
-        >
-          <ShoppingCart className="w-3.5 h-3.5" />
-          Bill <span className="tabular">({totalCartCount})</span>
-        </button>
-      </div>
-
-      <div className="flex-1 flex flex-col lg:flex-row gap-2 overflow-hidden min-h-0">
-        {/* Catalog */}
-        <section
-          aria-label="Products"
-          className={`flex-1 min-w-0 flex-col bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden ${
-            mobileTab === 'catalog' ? 'flex' : 'hidden lg:flex'
-          }`}
-        >
-          <div className="p-3 border-b border-slate-200 flex items-center gap-2 shrink-0">
-            <SearchInput
-              inputRef={searchInputRef}
-              value={search}
-              onChange={setSearch}
-              onKeyDown={handleSearchKeyDown}
-              placeholder="Scan a barcode or type a name, then Enter"
-              className="flex-1 w-full"
-              shortcut="F2"
-              autoFocus
-            />
-            <div className="hidden md:flex items-center gap-1.5 h-[38px] px-3 border border-slate-200 rounded-xl text-xs text-slate-500 shrink-0">
-              <span className="relative flex w-2 h-2">
-                <span className="absolute inset-0 rounded-full bg-brand-500 opacity-60 animate-ping" />
-                <span className="relative w-2 h-2 rounded-full bg-brand-500" />
-              </span>
-              <Barcode className="w-4 h-4 text-slate-400" />
-              Scanner ready
-            </div>
-          </div>
-
-          <div className="px-3 py-2 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0">
-            <button type="button" onClick={() => setSelectedCategory('ALL')} className={chip(selectedCategory === 'ALL')}>
-              All <span className="opacity-60 tabular">{activeCount}</span>
-            </button>
-            {categories.map((c) => (
+    <div className="flex-1 flex flex-col lg:h-full min-h-0 lg:overflow-hidden gap-2 sm:gap-3 max-w-6xl w-full mx-auto">
+      {/* 1. Search */}
+      <div className="relative shrink-0">
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 sm:w-6 sm:h-6 text-slate-400 pointer-events-none" />
+        <input
+          ref={searchRef}
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setSel(0);
+            setShowSuggest(true);
+          }}
+          onKeyDown={handleSearchKeyDown}
+          onFocus={() => setShowSuggest(true)}
+          onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
+          placeholder="Scan a barcode or type a product name, then Enter"
+          aria-label="Search product"
+          autoFocus
+          autoComplete="off"
+          className="w-full h-12 sm:h-14 pl-12 sm:pl-14 pr-4 text-base sm:text-lg bg-white border-2 border-brand-600 rounded-2xl outline-none focus:ring-4 focus:ring-brand-600/15"
+        />
+        {showSuggest && suggestions.length > 0 && (
+          <div className="absolute z-20 top-full mt-1.5 inset-x-0 max-h-[50vh] overflow-y-auto bg-white border border-slate-200 rounded-2xl shadow-xl overflow-hidden">
+            {suggestions.map((p, i) => (
               <button
-                key={c.categoryId}
+                key={p.productId}
                 type="button"
-                onClick={() => setSelectedCategory(c.categoryId)}
-                className={chip(selectedCategory === c.categoryId)}
+                onMouseDown={() => addProduct(p)}
+                className={`w-full flex flex-wrap sm:flex-nowrap items-center justify-between gap-x-3 gap-y-0.5 px-4 sm:px-5 py-2.5 text-left text-[15px] ${i === sel ? 'bg-brand-50' : 'hover:bg-slate-50'}`}
               >
-                {c.name}
+                <span className="font-medium text-slate-900 truncate">{p.name}</span>
+                <span className="text-[13px] text-slate-500 tabular shrink-0">
+                  {f(p.sellingPrice)} / {p.unit} · stock {formatNumber(p.currentStock)}
+                </span>
               </button>
             ))}
           </div>
-
-          <div className="flex-1 p-3 overflow-y-auto bg-slate-50/60">
-            {filteredProducts.length > 0 ? (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-2.5">
-                {filteredProducts.map((p) => (
-                  <ProductCard
-                    key={p.productId}
-                    product={p}
-                    onAdd={addToCart}
-                    currencySymbol={currencySymbol}
-                    allowNegativeStock={allowNegativeStock}
-                  />
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                icon={search ? Barcode : ShoppingCart}
-                title={search ? `Nothing matches "${search}"` : 'No products yet'}
-                description={
-                  search
-                    ? 'Check the spelling or scan the barcode again.'
-                    : 'Add products to your catalog to start billing.'
-                }
-                action={
-                  isAdmin && !search ? (
-                    <Link to="/products">
-                      <Button variant="primary" size="sm">
-                        Add products
-                      </Button>
-                    </Link>
-                  ) : null
-                }
-                className="h-full"
-              />
-            )}
-          </div>
-        </section>
-
-        {/* Bill */}
-        <aside
-          aria-label="Current bill"
-          className={`w-full lg:w-[340px] xl:w-[380px] flex-col bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden shrink-0 ${
-            mobileTab === 'cart' ? 'flex' : 'hidden lg:flex'
-          }`}
-        >
-          <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between shrink-0">
-            <h2 className="text-[15px] font-semibold text-slate-900">
-              Current bill <span className="text-slate-400 font-normal tabular">· {totalCartCount} items</span>
-            </h2>
-            {cart.length > 0 && (
-              <Button
-                variant="ghost"
-                size="xs"
-                icon={Trash2}
-                onClick={clearCart}
-                className="text-slate-500 hover:text-rose-700 hover:bg-rose-50"
-                title="Clear bill (F4)"
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-
-          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-3 shrink-0">
-            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
-              <User className="w-4 h-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-medium text-slate-900 truncate">{activeCustomer?.name || 'Walk-in customer'}</p>
-              {Number(activeCustomer?.outstandingBalance) > 0 ? (
-                <p className="text-xs text-amber-700 tabular truncate">
-                  Khata {formatCurrency(activeCustomer.outstandingBalance, currencySymbol)}
-                </p>
-              ) : (
-                <p className="text-xs text-slate-500 truncate">Add a customer for khata sales</p>
-              )}
-            </div>
-            <Button variant="secondary" size="sm" onClick={() => setIsCustomerModalOpen(true)}>
-              Change
-            </Button>
-          </div>
-
-          <div className="flex-1 p-3 overflow-y-auto space-y-2 min-h-0">
-            {cart.length > 0 ? (
-              cart.map((item) => (
-                <CartItem
-                  key={item.productId}
-                  item={item}
-                  onUpdateQty={updateCartQty}
-                  onRemove={removeFromCart}
-                  onUpdateDiscount={updateCartItemDiscount}
-                  currencySymbol={currencySymbol}
-                />
-              ))
-            ) : (
-              <EmptyState
-                icon={ShoppingCart}
-                title="The bill is empty"
-                description="Tap a product or scan a barcode to add it."
-                className="h-full"
-              />
-            )}
-          </div>
-
-          <div className="px-4 py-3 border-t border-slate-200 bg-slate-50 space-y-1.5 shrink-0 text-[13px]">
-            <div className="flex justify-between text-slate-600">
-              <span>Subtotal</span>
-              <span className="text-slate-900 tabular">{formatCurrency(cartSubtotal, currencySymbol)}</span>
-            </div>
-
-            <div className="flex justify-between items-center text-slate-600 min-h-7">
-              {isEditingBillDiscount ? (
-                <div className="flex items-start gap-1.5 w-full animate-in fade-in">
-                  <div className="flex-1">
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      min="0"
-                      value={billDiscountInput}
-                      onChange={(e) => setBillDiscountInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          applyBillDiscount();
-                        } else if (e.key === 'Escape') {
-                          setIsEditingBillDiscount(false);
-                        }
-                      }}
-                      autoFocus
-                      placeholder="Bill discount"
-                      aria-label="Bill discount"
-                      aria-invalid={billDiscountError ? 'true' : undefined}
-                      className={`w-full h-7 px-2 text-xs tabular rounded-lg border bg-white focus:outline-none focus:ring-[3px] ${
-                        billDiscountError
-                          ? 'border-rose-500 focus:ring-rose-600/15'
-                          : 'border-slate-300 focus:border-brand-600 focus:ring-brand-600/20'
-                      }`}
-                    />
-                    {billDiscountError && <p className="text-xs text-rose-600 mt-1">{billDiscountError}</p>}
-                  </div>
-                  <Button size="xs" onClick={applyBillDiscount} disabled={Boolean(billDiscountError)}>
-                    Apply
-                  </Button>
-                  <Button size="xs" variant="ghost" onClick={() => setIsEditingBillDiscount(false)}>
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBillDiscountInput(cartDiscount ? String(cartDiscount) : '');
-                      setIsEditingBillDiscount(true);
-                    }}
-                    className="inline-flex items-center gap-1 hover:text-slate-900 underline decoration-slate-300 underline-offset-2"
-                  >
-                    Discount
-                  </button>
-                  <span className={`tabular ${cartDiscount > 0 ? 'text-rose-600' : 'text-slate-400'}`}>
-                    −{formatCurrency(cartDiscount, currencySymbol)}
-                  </span>
-                </>
-              )}
-            </div>
-
-            {cartTax > 0 && (
-              <div className="flex justify-between text-slate-600">
-                <span>Tax ({settings.taxRate}%)</span>
-                <span className="text-slate-900 tabular">{formatCurrency(cartTax, currencySymbol)}</span>
-              </div>
-            )}
-
-            <div className="pt-2 mt-1 border-t border-dashed border-slate-300 flex items-baseline justify-between">
-              <span className="text-sm font-medium text-slate-700">Total</span>
-              <span key={cartTotal} className="text-2xl font-semibold text-slate-900 tabular tracking-tight animate-bump inline-block">
-                {formatCurrency(cartTotal, currencySymbol)}
-              </span>
-            </div>
-
-            <Button
-              variant="primary"
-              size="lg"
-              disabled={cart.length === 0}
-              onClick={() => setIsPaymentModalOpen(true)}
-              icon={CreditCard}
-              className="w-full mt-2"
-            >
-              Charge {formatCurrency(cartTotal, currencySymbol)}
-              <Kbd onDark className="ml-auto">F8</Kbd>
-            </Button>
-          </div>
-        </aside>
+        )}
       </div>
 
-      {/* Mobile: floating bill button while browsing products */}
-      {mobileTab === 'catalog' && cart.length > 0 && (
-        <div className="lg:hidden fixed bottom-3 inset-x-3 z-30 animate-in fade-in slide-in-from-bottom-3 duration-300">
-          <button
-            type="button"
-            onClick={() => setMobileTab('cart')}
-            className="w-full h-12 px-4 bg-slate-900 text-white rounded-2xl shadow-xl flex items-center justify-between text-sm font-medium"
-          >
-            <span className="flex items-center gap-2">
-              <span className="min-w-6 h-6 px-1.5 rounded-full bg-white/15 flex items-center justify-center text-xs tabular">
-                {totalCartCount}
-              </span>
-              View bill
-            </span>
-            <span className="flex items-center gap-1.5 tabular">
-              {formatCurrency(cartTotal, currencySymbol)}
-              <ArrowRight className="w-4 h-4" />
-            </span>
-          </button>
+      {/* 2. Bill */}
+      <section aria-label="Current bill" className="flex-1 min-h-[220px] lg:min-h-0 flex flex-col bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
+          <p className="text-[14px] text-slate-700">
+            <span className="font-semibold text-slate-900">Bill</span> · {cart.length} items
+          </p>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" icon={ListRestart} onClick={() => setIsHeldOpen(true)}>
+              <span className="hidden sm:inline">Held</span>{heldCount > 0 ? ` (${heldCount})` : ''}
+            </Button>
+            <Button variant="ghost" size="sm" icon={PauseCircle} onClick={handleHold} isLoading={isHolding} disabled={!cart.length}>
+              <span className="hidden sm:inline">Hold</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={Trash2}
+              onClick={() => {
+                clearCart();
+                setReceived('');
+                focusSearch();
+              }}
+              disabled={!cart.length}
+              className="hover:text-rose-700 hover:bg-rose-50"
+            >
+              <span className="hidden sm:inline">Clear</span>
+            </Button>
+          </div>
         </div>
-      )}
 
-      {/* Modals */}
-      <CustomerSelectModal
-        isOpen={isCustomerModalOpen}
-        onClose={() => setIsCustomerModalOpen(false)}
-        onSelect={setActiveCustomer}
-      />
+        <div className="flex-1 overflow-auto">
+          {cart.length === 0 ? (
+            <div className="h-full flex items-center justify-center p-10 text-center text-slate-500 text-[15px]">
+              The bill is empty. Scan a barcode or type a product name above and press Enter.
+            </div>
+          ) : (
+            <table className="w-full text-[14px] sm:text-[15px]">
+              <thead className="sticky top-0 bg-slate-50 text-xs text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="hidden sm:table-cell text-left font-medium px-4 py-2 w-10">#</th>
+                  <th className="text-left font-medium px-3 sm:px-4 py-2">Item</th>
+                  <th className="hidden md:table-cell text-right font-medium px-4 py-2">Price</th>
+                  <th className="text-left font-medium px-2 sm:px-4 py-2">Qty</th>
+                  <th className="text-right font-medium px-2 sm:px-4 py-2">Amount</th>
+                  <th className="w-10" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {cart.map((item, i) => (
+                  <CartRow
+                    key={item.productId}
+                    index={i + 1}
+                    item={item}
+                    highlight={item.productId === lastAddedId}
+                    onQty={updateCartQty}
+                    onRemove={removeFromCart}
+                    f={f}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
 
+      {/* 3. Pay */}
+      <section aria-label="Payment" className="shrink-0 bg-white rounded-2xl border border-slate-200 shadow-xs p-3 sm:p-4">
+        <div className="grid grid-cols-2 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-4 lg:gap-x-6 gap-y-2.5 items-end">
+          <div className="order-last lg:order-none col-span-2 lg:col-span-1 text-[13px] text-slate-600 space-y-1.5">
+            <p className="flex flex-wrap items-center gap-1.5">
+              <User className="w-4 h-4 text-slate-400" />
+              Customer: <span className="font-semibold text-slate-900">{activeCustomer?.name || 'Walk-in'}</span>
+              {Number(activeCustomer?.outstandingBalance) > 0 && (
+                <span className="text-amber-700 tabular">(khata {f(activeCustomer.outstandingBalance)})</span>
+              )}
+              <button type="button" onClick={() => setIsCustomerModalOpen(true)} className="text-brand-700 underline underline-offset-2 ml-1">
+                Change
+              </button>
+            </p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              {isEditingDiscount ? (
+                <span className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min="0"
+                    value={discountInput}
+                    onChange={(e) => setDiscountInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') applyDiscount();
+                      if (e.key === 'Escape') setIsEditingDiscount(false);
+                    }}
+                    autoFocus
+                    placeholder="Discount"
+                    aria-label="Bill discount"
+                    className="w-28 h-8 px-2 border border-slate-300 rounded-lg tabular"
+                  />
+                  <Button size="xs" onClick={applyDiscount}>Apply</Button>
+                  <Button size="xs" variant="ghost" onClick={() => setIsEditingDiscount(false)}>Cancel</Button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDiscountInput(cartDiscount ? String(cartDiscount) : '');
+                    setIsEditingDiscount(true);
+                  }}
+                  className="text-brand-700 underline underline-offset-2"
+                >
+                  {cartDiscount > 0 ? `Discount −${f(cartDiscount)}` : 'Add discount'}
+                </button>
+              )}
+              <button type="button" onClick={() => setIsPaymentModalOpen(true)} disabled={!cart.length} className="text-brand-700 underline underline-offset-2 disabled:opacity-40">
+                Card / Khata / Split
+              </button>
+              {cartTax > 0 && <span className="tabular">Tax ({settings.taxRate}%) {f(cartTax)}</span>}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs text-slate-500">Total</p>
+            <p key={cartTotal} className="text-2xl sm:text-3xl font-bold text-slate-900 tabular tracking-tight animate-bump whitespace-nowrap">{f(cartTotal)}</p>
+          </div>
+
+          <div>
+            <label htmlFor="pos-received" className="text-xs text-slate-500">
+              Received
+            </label>
+            <input
+              id="pos-received"
+              ref={receivedRef}
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              value={received}
+              onChange={(e) => setReceived(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  completeCash();
+                }
+              }}
+              placeholder="0"
+              className="block w-full lg:w-44 h-11 px-3 text-xl font-bold text-right tabular border-2 border-slate-300 rounded-xl outline-none focus:border-brand-600 focus:ring-4 focus:ring-brand-600/15"
+            />
+          </div>
+
+          <div className="col-span-2 sm:col-span-1 lg:min-w-[140px]">
+            <p className="text-xs text-slate-500">Change to return</p>
+            {change === null || !cart.length ? (
+              <p className="text-xl font-bold text-slate-300">—</p>
+            ) : change < 0 ? (
+              <p className="text-base font-semibold text-rose-600 tabular">Short by {f(-change)}</p>
+            ) : (
+              <p className="text-xl sm:text-2xl font-bold text-brand-700 tabular whitespace-nowrap">{f(change)}</p>
+            )}
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => completeCash()}
+          disabled={!canComplete}
+          className="mt-3 w-full h-12 rounded-2xl bg-brand-600 hover:bg-brand-700 text-white text-base sm:text-lg font-bold flex items-center justify-center gap-2.5 disabled:opacity-45 disabled:cursor-not-allowed transition-colors"
+        >
+          <CheckCircle2 className="w-6 h-6" />
+          {isCompleting ? 'Saving…' : 'Complete & Print Bill'}
+        </button>
+      </section>
+
+      <CustomerSelectModal isOpen={isCustomerModalOpen} onClose={() => setIsCustomerModalOpen(false)} onSelect={setActiveCustomer} />
       <PaymentModal
         isOpen={isPaymentModalOpen}
         onClose={() => setIsPaymentModalOpen(false)}
-        onSaleComplete={handleSaleSuccess}
+        onSaleComplete={(data) => {
+          setReceived('');
+          showReceipt(data);
+        }}
       />
-
+      <HeldBillsModal
+        isOpen={isHeldOpen}
+        onClose={() => setIsHeldOpen(false)}
+        onResume={handleResume}
+        hasCurrentCart={cart.length > 0}
+        onChanged={refreshHeldCount}
+      />
+      <ManagerPinModal
+        isOpen={Boolean(approval)}
+        reason={approval?.reason}
+        onClose={() => setApproval(null)}
+        onApproved={(token) => {
+          setApproval(null);
+          completeCash(token);
+        }}
+      />
       <ReceiptModal
         isOpen={isReceiptModalOpen}
-        onClose={handleReceiptClose}
+        onClose={() => {
+          setIsReceiptModalOpen(false);
+          focusSearch();
+        }}
         saleData={completedSale}
       />
     </div>
+  );
+}
+
+function CartRow({ index, item, highlight, onQty, onRemove, f }) {
+  const weighted = isWeightedUnit(item.unit);
+  const [qty, setQty] = useState(String(item.quantity));
+  const [prevQty, setPrevQty] = useState(item.quantity);
+  if (prevQty !== item.quantity) {
+    setPrevQty(item.quantity);
+    setQty(String(item.quantity));
+  }
+  const commit = () => {
+    const n = weighted ? parseFloat(qty) : parseInt(qty, 10);
+    if (!Number.isFinite(n) || n <= 0) setQty(String(item.quantity));
+    else if (n !== item.quantity) onQty(item.productId, n);
+  };
+  const amount = round2(item.sellingPrice * item.quantity - (item.discount || 0));
+
+  return (
+    <tr className={highlight ? 'animate-in fade-in bg-brand-50/40' : ''}>
+      <td className="hidden sm:table-cell px-4 py-2 text-slate-400 tabular">{index}</td>
+      <td className="px-3 sm:px-4 py-2">
+        <p className="font-semibold text-slate-900 leading-snug">{item.name}</p>
+        <p className="md:hidden text-xs text-slate-500 tabular">{f(item.sellingPrice)} /{item.unit}</p>
+        {item.discount > 0 && <p className="text-xs text-rose-600 tabular">Discount −{f(item.discount)}</p>}
+      </td>
+      <td className="hidden md:table-cell px-4 py-2 text-right tabular text-slate-600 whitespace-nowrap">
+        {f(item.sellingPrice)}
+        <span className="text-xs text-slate-400"> /{item.unit}</span>
+      </td>
+      <td className="px-2 sm:px-4 py-2">
+        <div className="inline-flex items-center h-9 rounded-xl border border-slate-300 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => (item.quantity <= 1 ? onRemove(item.productId) : onQty(item.productId, round2(item.quantity - 1)))}
+            className="w-9 h-full flex items-center justify-center hover:bg-slate-100"
+            aria-label={`Less ${item.name}`}
+          >
+            <Minus className="w-4 h-4" />
+          </button>
+          <input
+            value={qty}
+            inputMode={weighted ? 'decimal' : 'numeric'}
+            onChange={(e) => setQty(e.target.value.replace(weighted ? /[^\d.]/g : /\D/g, ''))}
+            onBlur={commit}
+            onKeyDown={(e) => e.key === 'Enter' && commit()}
+            aria-label={`Quantity of ${item.name}`}
+            className="w-11 sm:w-14 h-full text-center font-semibold tabular border-x border-slate-200 outline-none focus:bg-brand-50"
+          />
+          <button
+            type="button"
+            onClick={() => onQty(item.productId, round2(item.quantity + 1))}
+            className="w-9 h-full flex items-center justify-center hover:bg-slate-100"
+            aria-label={`More ${item.name}`}
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
+      </td>
+      <td className="px-2 sm:px-4 py-2 text-right font-bold text-slate-900 tabular whitespace-nowrap">{f(amount)}</td>
+      <td className="pr-3">
+        <button type="button" onClick={() => onRemove(item.productId)} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50" aria-label={`Remove ${item.name}`}>
+          <X className="w-4 h-4" />
+        </button>
+      </td>
+    </tr>
   );
 }

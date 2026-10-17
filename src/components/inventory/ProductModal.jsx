@@ -222,20 +222,21 @@ export function ProductModal({
     try {
       setIsSubmitting(true);
 
-      // Instant optimistic save
-      showToast(
-        product
-          ? `"${formData.name.trim()}" updated`
-          : `"${formData.name.trim()}" added with ${formData.currentStock} ${formData.unit} in stock`,
-        'success'
-      );
-      if (onSave) onSave();
-      onClose();
-
-      // Background sync
-      await saveProductOptimistic(formData);
+      const res = await saveProductOptimistic(formData);
+      if (res.success) {
+        showToast(
+          product
+            ? `"${formData.name.trim()}" updated`
+            : `"${formData.name.trim()}" added with ${formData.currentStock} ${formData.unit} in stock`,
+          'success'
+        );
+        if (onSave) onSave();
+        onClose();
+      } else {
+        showToast(res.error || 'Could not save the product', 'error');
+      }
     } catch {
-      showToast('Could not sync the product. It will retry on the next sync.', 'error');
+      showToast('Could not save the product. Check your connection and try again.', 'error');
     } finally {
       setIsSubmitting(false);
     }

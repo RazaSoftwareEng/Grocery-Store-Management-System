@@ -22,15 +22,22 @@ import { Reports } from './pages/Reports';
 import { Settings } from './pages/Settings';
 import { Users } from './pages/Users';
 import { CashierCounter } from './pages/CashierCounter';
+import { AuditLog } from './pages/AuditLog';
+import { StockCount } from './pages/StockCount';
+import { ChangePasswordScreen } from './components/common/ChangePasswordForm';
 
-function ProtectedRoute({ children, adminOnly = false }) {
-  const { isAuthenticated, isAdmin } = useAuth();
+function ProtectedRoute({ children, adminOnly = false, permission }) {
+  const { isAuthenticated, isAdmin, mustChangePassword, can } = useAuth();
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  if (adminOnly && !isAdmin) {
+  if (mustChangePassword) {
+    return <ChangePasswordScreen />;
+  }
+
+  if (adminOnly && !isAdmin && !(permission && can(permission))) {
     return <Navigate to="/pos" replace />;
   }
 
@@ -83,7 +90,9 @@ export function App() {
                 <Route path="sales" element={<AdminOnly><Sales /></AdminOnly>} />
                 <Route path="customers" element={<AdminOnly><Customers /></AdminOnly>} />
                 <Route path="expenses" element={<AdminOnly><Expenses /></AdminOnly>} />
-                <Route path="reports" element={<AdminOnly><Reports /></AdminOnly>} />
+                <Route path="reports" element={<ProtectedRoute adminOnly permission="canViewReports"><Reports /></ProtectedRoute>} />
+                <Route path="stock-count" element={<AdminOnly><StockCount /></AdminOnly>} />
+                <Route path="audit-log" element={<AdminOnly><AuditLog /></AdminOnly>} />
                 <Route path="settings" element={<AdminOnly><Settings /></AdminOnly>} />
                 <Route path="users" element={<AdminOnly><Users /></AdminOnly>} />
                 <Route path="*" element={<Navigate to="/" replace />} />

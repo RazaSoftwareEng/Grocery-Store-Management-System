@@ -10,7 +10,7 @@ import { api } from '../../services/api';
 import { formatCurrency } from '../../utils/formatters';
 import { Plus, Trash2, Boxes, PackageOpen } from 'lucide-react';
 
-export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
+export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess, editing = null, prefillItems = null }) {
   const { products, currencySymbol } = useStore();
   const { showToast } = useToast();
 
@@ -22,6 +22,7 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
   const [lineErrors, setLineErrors] = useState({});
   const [amountPaid, setAmountPaid] = useState('0');
   const [notes, setNotes] = useState('');
+  const [status, setStatus] = useState('ORDERED');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const activeSupplier = suppliers.find((s) => s.supplierId === supplierId);
@@ -47,6 +48,16 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
     if (isOpen) {
       setSupplierId((prev) => prev || suppliers[0]?.supplierId || '');
       setSelectedProductId((prev) => prev || products[0]?.productId || '');
+      if (editing) {
+        setSupplierId(editing.supplierId);
+        setItems((editing.items || []).map((i) => ({ productId: i.productId, productName: i.productName, quantity: Number(i.quantity), unitCost: Number(i.unitCost) })));
+        setNotes(editing.notes || '');
+        setStatus(editing.status === 'DRAFT' ? 'DRAFT' : 'ORDERED');
+        setAmountPaid('0');
+      } else if (prefillItems?.length) {
+        setItems(prefillItems);
+        setStatus('DRAFT');
+      }
       v.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,16 +116,19 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
 
     try {
       setIsSubmitting(true);
-      const res = await api.createPurchase({
-        supplierId,
-        supplierName: activeSupplier?.name || 'Supplier',
-        items,
-        amountPaid: parseFloat(amountPaid) || 0,
-        notes,
-      });
+      const res = editing
+        ? await api.updatePurchase(editing.purchaseId, { supplierId, items, notes, status })
+        : await api.createPurchase({
+            supplierId,
+            supplierName: activeSupplier?.name || 'Supplier',
+            items,
+            amountPaid: parseFloat(amountPaid) || 0,
+            notes,
+            status,
+          });
 
       if (res.success) {
-        showToast('Purchase order created. Confirm it when the goods arrive.', 'success');
+        showToast(editing ? 'Purchase order updated' : 'Purchase order saved. Receive it when the goods arrive.', 'success');
         setItems([]);
         setNotes('');
         setAmountPaid('0');
@@ -137,7 +151,7 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="New purchase order"
+      title={editing ? `Edit ${editing.purchaseNumber}` : 'New purchase order'}
       subtitle="Record goods coming in from a supplier."
       maxWidth="max-w-3xl"
       footer={
@@ -170,6 +184,15 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
             onChange={(e) => setNotes(e.target.value)}
             placeholder="e.g. Challan #4492"
             optional
+          />
+          <Select
+            label="Order status"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            options={[
+              { value: 'DRAFT', label: 'Draft (not sent yet)' },
+              { value: 'ORDERED', label: 'Ordered from supplier' },
+            ]}
           />
         </div>
 
@@ -285,7 +308,7 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-          <Input
+          {!editing && <Input
             label="Amount paid now"
             type="number"
             inputMode="decimal"
@@ -298,7 +321,7 @@ export function PurchaseModal({ isOpen, onClose, suppliers, onSuccess }) {
             className="tabular"
             hint="Leave 0 if the whole amount is on credit."
             {...v.field('amountPaid')}
-          />
+          />}
 
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-[13px] space-y-2">
             <div className="flex justify-between">

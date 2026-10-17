@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { api } from '../../services/api';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import {
   Menu,
@@ -9,14 +8,17 @@ import {
   ChevronDown,
   ChevronRight,
   LogOut,
+  KeyRound,
+  Lock,
   Users as UsersIcon,
   PackageCheck,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { Button, Kbd } from '../common/Button';
-import { ConnectGoogleSheetModal } from '../common/ConnectGoogleSheetModal';
+import { Button } from '../common/Button';
+import { Modal } from '../common/Modal';
+import { ChangePasswordForm } from '../common/ChangePasswordForm';
 
 const PAGE_TITLES = {
   '/': 'Dashboard',
@@ -33,6 +35,8 @@ const PAGE_TITLES = {
   '/reports': 'Reports & profit',
   '/users': 'Staff & cashiers',
   '/settings': 'Settings',
+  '/stock-count': 'Stock count',
+  '/audit-log': 'Audit log',
 };
 
 function useClickOutside(ref, onOutside) {
@@ -53,14 +57,14 @@ function useClickOutside(ref, onOutside) {
 }
 
 export function Header({ onToggleMobileNav }) {
-  const { settings, products, isLiveBackend, refreshAllData, isLoading } = useStore();
-  const { currentUser, logout, isAdmin } = useAuth();
+  const { settings, products, refreshAllData, isLoading } = useStore();
+  const { currentUser, logout, isAdmin, lock } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [showNotifications, setShowNotifications] = useState(false);
-  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const userMenuRef = useRef(null);
   const notifRef = useRef(null);
@@ -119,25 +123,6 @@ export function Header({ onToggleMobileNav }) {
 
       {/* Right: status, sync, alerts, POS, account */}
       <div className="flex items-center gap-1.5 sm:gap-2">
-        <button
-          type="button"
-          onClick={() => isAdmin && setShowConnectModal(true)}
-          className={`hidden sm:inline-flex items-center gap-2 h-8 px-2.5 rounded-lg text-xs font-medium border transition-colors ${
-            isAdmin ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
-          } border-slate-200 text-slate-700`}
-          title={
-            isLiveBackend
-              ? `${api.backendName} is connected${isAdmin ? '. Click to configure.' : ''}`
-              : `Running in local demo mode${isAdmin ? '. Click to connect a database.' : ''}`
-          }
-        >
-          <span className="relative flex w-2 h-2">
-            {isLiveBackend && <span className="absolute inset-0 rounded-full bg-brand-500 opacity-60 animate-ping" />}
-            <span className={`relative w-2 h-2 rounded-full ${isLiveBackend ? 'bg-brand-500' : 'bg-amber-500'}`} />
-          </span>
-          {isLiveBackend ? api.backendName : 'Demo mode'}
-        </button>
-
         <button
           type="button"
           onClick={handleRefresh}
@@ -228,11 +213,6 @@ export function Header({ onToggleMobileNav }) {
             <span className="hidden sm:inline">Open POS</span>
           </Button>
         )}
-        {isPosPage && (
-          <span className="hidden md:flex items-center gap-1.5 text-xs text-slate-500 ml-1">
-            <Kbd>F2</Kbd> search <Kbd>F8</Kbd> pay
-          </span>
-        )}
 
         {/* Account menu */}
         <div className="relative pl-2 ml-1 border-l border-slate-200" ref={userMenuRef}>
@@ -275,6 +255,28 @@ export function Header({ onToggleMobileNav }) {
 
               <button
                 type="button"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  setShowPasswordModal(true);
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 h-9 text-[13px] text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <KeyRound className="w-4 h-4 text-slate-400" />
+                Change my password
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  lock();
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 h-9 text-[13px] text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <Lock className="w-4 h-4 text-slate-400" />
+                Lock screen
+              </button>
+              <button
+                type="button"
                 onClick={handleLogout}
                 className="w-full flex items-center gap-2.5 px-2.5 h-9 text-[13px] text-rose-700 hover:bg-rose-50 rounded-lg transition-colors"
               >
@@ -286,7 +288,9 @@ export function Header({ onToggleMobileNav }) {
         </div>
       </div>
 
-      <ConnectGoogleSheetModal isOpen={showConnectModal} onClose={() => setShowConnectModal(false)} />
+      <Modal isOpen={showPasswordModal} onClose={() => setShowPasswordModal(false)} title="Change my password" maxWidth="max-w-sm">
+        <ChangePasswordForm onDone={() => setShowPasswordModal(false)} />
+      </Modal>
     </header>
   );
 }

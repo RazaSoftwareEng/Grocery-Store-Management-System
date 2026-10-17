@@ -6,16 +6,20 @@ import { SearchInput } from '../common/SearchInput';
 import { EmptyState } from '../common/Table';
 import { formatCurrency } from '../../utils/formatters';
 import { useStore } from '../../context/StoreContext';
+import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useFormValidation, rules } from '../../hooks/useFormValidation';
 import { api } from '../../services/api';
 import { UserPlus, Phone, ArrowLeft, Users, ChevronRight } from 'lucide-react';
 
-const EMPTY_CUSTOMER = { name: '', phone: '', address: '', creditLimit: '10000', notes: '' };
+const EMPTY_CUSTOMER = { name: '', phone: '', address: '', creditLimit: '0', notes: '' };
 
 export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
-  const { customers, currencySymbol, refreshAllData } = useStore();
+  const { currencySymbol, walkInCustomer } = useStore();
+  const { isAdmin } = useAuth();
   const { showToast } = useToast();
+  const [customers, setCustomers] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const [search, setSearch] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -31,9 +35,7 @@ export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
     phone: (val) => {
       const msg = rules.phone(val);
       if (msg) return msg;
-      const digits = val.replace(/\D/g, '');
-      const dup = digits && customers.find((c) => c.phone && c.phone.replace(/\D/g, '') === digits);
-      return dup ? `This number belongs to ${dup.name}` : '';
+      return '';
     },
     creditLimit: rules.nonNegative('Credit limit', { required: false }),
   });
@@ -48,10 +50,24 @@ export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const filteredCustomers = customers.filter((c) => {
-    const q = search.toLowerCase();
-    return c.name?.toLowerCase().includes(q) || c.phone?.includes(q) || c.customerId?.toLowerCase().includes(q);
-  });
+  // Server-side search (debounced)
+  useEffect(() => {
+    if (!isOpen || showAddForm) return undefined;
+    let cancelled = false;
+    setIsSearching(true);
+    const t = setTimeout(async () => {
+      const res = await api.searchCustomers(search);
+      if (cancelled) return;
+      setIsSearching(false);
+      if (res.success) setCustomers(res.data);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [search, isOpen, showAddForm]);
+
+  const filteredCustomers = search.trim() ? customers : [walkInCustomer, ...customers];
 
   const set = (key) => (e) => setNewCustomer((prev) => ({ ...prev, [key]: e.target.value }));
 
@@ -64,7 +80,6 @@ export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
       const res = await api.saveCustomer({ ...newCustomer, name: newCustomer.name.trim() });
       if (res.success) {
         showToast(`${newCustomer.name.trim()} added and selected`, 'success');
-        await refreshAllData();
         onSelect(res.data);
         onClose();
       } else {
@@ -158,7 +173,7 @@ export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
               );
             })}
 
-            {filteredCustomers.length === 0 && (
+            {filteredCustomers.length === 0 && !isSearching && (
               <EmptyState
                 icon={Users}
                 title={`No customer matches "${search}"`}
@@ -210,8 +225,10 @@ export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
               {...v.field('phone')}
               isValid={v.field('phone').isValid && !!newCustomer.phone}
             />
+            {isAdmin && (
             <Input
               label="Credit limit"
+              hint="0 = no limit"
               type="number"
               inputMode="decimal"
               min="0"
@@ -222,7 +239,11 @@ export function CustomerSelectModal({ isOpen, onClose, onSelect }) {
               className="tabular"
               {...v.field('creditLimit')}
             />
+            )}
           </div>
+          {!isAdmin && (
+            <p className="text-xs text-slate-500">New customers start with no khata limit. The store manager can set one.</p>
+          )}
 
           <Input
             label="Address"

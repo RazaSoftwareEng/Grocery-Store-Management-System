@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
 import { useConfirm } from '../context/ConfirmContext';
-import { api } from '../services/api';
-import { formatCurrency } from '../utils/formatters';
+import { formatCurrency, formatShortDate } from '../utils/formatters';
+import { todayStr, daysBetween } from '../utils/dates';
 import { exportToCsv } from '../utils/exportCsv';
 import { Table } from '../components/common/Table';
 import { Pagination } from '../components/common/Pagination';
@@ -21,6 +21,7 @@ import {
   ArrowLeftRight,
   Barcode,
   Trash2,
+  ShoppingBag,
 } from 'lucide-react';
 
 export function Products() {
@@ -28,10 +29,15 @@ export function Products() {
     products,
     categories,
     currencySymbol,
-    refreshAllData,
+    settings,
     deleteProductOptimistic,
+    saveProductOptimistic,
     quickAdjustStock,
   } = useStore();
+  const navigate = useNavigate();
+  const expiryDays = Number(settings.expiryAlertDays) || 30;
+  const today = todayStr();
+  const daysLeft = (p) => (p.expiryDate ? daysBetween(today, String(p.expiryDate).slice(0, 10)) : null);
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -39,7 +45,7 @@ export function Products() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [stockFilter, setStockFilter] = useState(
-    searchParams.get('filter') === 'low_stock' ? 'LOW_STOCK' : 'ALL'
+    searchParams.get('filter') === 'low_stock' ? 'LOW_STOCK' : searchParams.get('filter') === 'expiring' ? 'EXPIRING' : 'ALL'
   );
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -63,6 +69,9 @@ export function Products() {
       if (stockFilter === 'LOW_STOCK' && (stock > minStock || stock <= 0)) return false;
       if (stockFilter === 'OUT_OF_STOCK' && stock > 0) return false;
       if (stockFilter === 'IN_STOCK' && stock <= 0) return false;
+      const left = daysLeft(p);
+      if (stockFilter === 'EXPIRING' && (left === null || left > expiryDays)) return false;
+      if (stockFilter === 'EXPIRED' && (left === null || left >= 0)) return false;
 
       // Search query
       if (search.trim()) {
@@ -76,7 +85,8 @@ export function Products() {
       }
       return true;
     });
-  }, [products, categoryFilter, stockFilter, search]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products, categoryFilter, stockFilter, search, expiryDays]);
 
   const totalPages = Math.ceil(filteredProducts.length / pageSize) || 1;
   const paginatedProducts = filteredProducts.slice(
@@ -107,40 +117,35 @@ export function Products() {
 
     if (!(await confirm({ title: isAct ? `Deactivate "${prod.name}"?` : `Re-activate "${prod.name}"?`, message: confirmMsg, confirmText: isAct ? 'Deactivate' : 'Re-activate', tone: isAct ? 'warning' : 'info' }))) return;
 
-    try {
-      if (isAct) {
-        await api.deleteProduct(prod.productId, false);
-        showToast('Product deactivated', 'info');
-      } else {
-        await api.saveProduct({ ...prod, status: 'ACTIVE' });
-        showToast('Product activated', 'success');
-      }
-      await refreshAllData();
-    } catch {
-      showToast('Action failed', 'error');
-    }
+    const res = isAct
+      ? await deleteProductOptimistic(prod.productId, false)
+      : await saveProductOptimistic({ ...prod, status: 'ACTIVE' });
+    if (res.success) showToast(isAct ? 'Product deactivated' : 'Product activated', isAct ? 'info' : 'success');
+    else showToast(res.error || 'Action failed', 'error');
   };
 
   const handleDeletePermanent = async (prod) => {
-    if (!(await confirm({ title: `Delete "${prod.name}"?`, message: 'The product is removed permanently. Past sales keep their records. This cannot be undone.', confirmText: 'Delete product', tone: 'danger' }))) {
+    if (!(await confirm({ title: `Delete "${prod.name}"?`, message: 'Only products that were never sold or purchased can be deleted. Others can only be deactivated. This cannot be undone.', confirmText: 'Delete product', tone: 'danger' }))) {
       return;
     }
-    try {
-      showToast(`Deleting "${prod.name}"...`, 'info');
-      await deleteProductOptimistic(prod.productId, true);
-      showToast(`"${prod.name}" deleted`, 'success');
-    } catch {
-      showToast('Failed to delete product', 'error');
-    }
+    const res = await deleteProductOptimistic(prod.productId, true);
+    if (res.success) showToast(`"${prod.name}" deleted`, 'success');
+    else showToast(res.error || 'Failed to delete product', 'error');
   };
 
-  const handleClearDummyData = async () => {
-    if (!(await confirm({ title: 'Remove all sample products?', message: 'You will start with an empty catalog. This cannot be undone.', confirmText: 'Remove samples', tone: 'danger' }))) {
-      return;
-    }
-    api.clearAllDummyData();
-    refreshAllData();
-    showToast('All dummy products removed. Catalog is clean.', 'success');
+  // Reorder: low-stock products into a new purchase order
+  const lowStock = products.filter((p) => p.status !== 'INACTIVE' && Number(p.currentStock) <= Number(p.minimumStock));
+  const handleCreatePo = () => {
+    navigate('/purchases', {
+      state: {
+        reorder: lowStock.map((p) => ({
+          productId: p.productId,
+          productName: p.name,
+          quantity: Math.max(1, Math.ceil(Number(p.minimumStock) * 2 - Number(p.currentStock))),
+          unitCost: Number(p.costPrice) || 0,
+        })),
+      },
+    });
   };
 
   const handleExportCsv = () => {
@@ -179,6 +184,11 @@ export function Products() {
               </span>
             )}
           </div>
+          {daysLeft(row) !== null && daysLeft(row) <= expiryDays && (
+            <span className={`text-xs ${daysLeft(row) < 0 ? 'text-rose-600' : 'text-amber-700'}`}>
+              {daysLeft(row) < 0 ? 'Expired' : 'Expires'} {formatShortDate(row.expiryDate)}
+            </span>
+          )}
         </div>
       ),
     },
@@ -323,15 +333,11 @@ export function Products() {
         description={`${products.length} items in your catalog`}
         actions={
           <>
-            <Button
-              variant="ghost"
-              icon={Trash2}
-              onClick={handleClearDummyData}
-              className="text-slate-500 hover:text-rose-700 hover:bg-rose-50"
-              title="Remove all sample products"
-            >
-              Clear samples
-            </Button>
+            {lowStock.length > 0 && (
+              <Button variant="secondary" icon={ShoppingBag} onClick={handleCreatePo} title="Purchase order for all low-stock products">
+                Create PO ({lowStock.length} low)
+              </Button>
+            )}
             <Button variant="secondary" icon={Download} onClick={handleExportCsv}>
               Export
             </Button>
@@ -385,6 +391,8 @@ export function Products() {
             <option value="LOW_STOCK">Low stock</option>
             <option value="OUT_OF_STOCK">Out of stock</option>
             <option value="IN_STOCK">In stock</option>
+            <option value="EXPIRING">Expiring in {expiryDays} days</option>
+            <option value="EXPIRED">Expired</option>
           </select>
 
           {hasFilters && (

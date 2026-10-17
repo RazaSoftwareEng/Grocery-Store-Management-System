@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Minus, Plus, Trash2, Tag, Check, X } from 'lucide-react';
-import { formatCurrency } from '../../utils/formatters';
+import { formatCurrency, isWeightedUnit, round2 } from '../../utils/formatters';
 
 export function CartItem({
   item,
@@ -9,8 +9,21 @@ export function CartItem({
   onUpdateDiscount,
   currencySymbol,
 }) {
-  const gross = item.sellingPrice * item.quantity;
-  const lineTotal = gross - (item.discount || 0);
+  const gross = round2(item.sellingPrice * item.quantity);
+  const lineTotal = round2(gross - (item.discount || 0));
+  const weighted = isWeightedUnit(item.unit);
+
+  // Typed quantity is kept as text so "0." or "1.2" can be entered for kg / litre items
+  const [qtyInput, setQtyInput] = useState(String(item.quantity));
+  useEffect(() => setQtyInput(String(item.quantity)), [item.quantity]);
+  const commitQty = () => {
+    const q = weighted ? parseFloat(qtyInput) : parseInt(qtyInput, 10);
+    if (!Number.isFinite(q) || q <= 0) {
+      setQtyInput(String(item.quantity));
+      return;
+    }
+    if (q !== item.quantity) onUpdateQty(item.productId, q);
+  };
 
   const [isEditingDiscount, setIsEditingDiscount] = useState(false);
   const [discountInput, setDiscountInput] = useState('');
@@ -72,23 +85,31 @@ export function CartItem({
         <div className="flex items-center h-7 rounded-lg border border-slate-300 overflow-hidden">
           <button
             type="button"
-            onClick={() => (item.quantity <= 1 ? remove() : onUpdateQty(item.productId, item.quantity - 1))}
+            onClick={() => (item.quantity <= 1 ? remove() : onUpdateQty(item.productId, round2(item.quantity - 1)))}
             aria-label={`Decrease ${item.name}`}
             className="w-7 h-full text-slate-600 hover:bg-slate-100 flex items-center justify-center transition-colors"
           >
             <Minus className="w-3 h-3" />
           </button>
           <input
-            type="number"
-            min="1"
-            value={item.quantity}
-            onChange={(e) => onUpdateQty(item.productId, Math.max(1, parseInt(e.target.value) || 1))}
+            type="text"
+            inputMode={weighted ? 'decimal' : 'numeric'}
+            value={qtyInput}
+            onChange={(e) => setQtyInput(e.target.value.replace(weighted ? /[^\d.]/g : /\D/g, ''))}
+            onBlur={commitQty}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitQty();
+              }
+            }}
             aria-label={`Quantity of ${item.name}`}
-            className="w-9 h-full text-center text-xs font-semibold tabular bg-transparent text-slate-900 border-x border-slate-200 focus:outline-none focus:bg-brand-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+            title={weighted ? `Decimal quantity allowed (${item.unit})` : undefined}
+            className="w-12 h-full text-center text-xs font-semibold tabular bg-transparent text-slate-900 border-x border-slate-200 focus:outline-none focus:bg-brand-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
           />
           <button
             type="button"
-            onClick={() => onUpdateQty(item.productId, item.quantity + 1)}
+            onClick={() => onUpdateQty(item.productId, round2(item.quantity + 1))}
             aria-label={`Increase ${item.name}`}
             className="w-7 h-full text-slate-600 hover:bg-slate-100 flex items-center justify-center transition-colors"
           >

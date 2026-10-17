@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { api } from '../../services/api';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -19,6 +18,8 @@ import {
   LogOut,
   UserCheck,
   Store,
+  ClipboardCheck,
+  ScrollText,
 } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 import { useAuth } from '../../context/AuthContext';
@@ -30,19 +31,21 @@ const ALL_NAV_ITEMS = [
   { group: 'Catalog', to: '/products', label: 'Products', icon: Package, adminOnly: true, badge: 'lowStock' },
   { group: 'Catalog', to: '/categories', label: 'Categories', icon: Layers, adminOnly: true },
   { group: 'Catalog', to: '/inventory', label: 'Stock movements', icon: ArrowLeftRight, adminOnly: true },
+  { group: 'Catalog', to: '/stock-count', label: 'Stock count', icon: ClipboardCheck, adminOnly: true },
   { group: 'Buying', to: '/purchases', label: 'Purchases', icon: Boxes, adminOnly: true },
   { group: 'Buying', to: '/suppliers', label: 'Suppliers', icon: Truck, adminOnly: true },
   { group: 'Selling', to: '/sales', label: 'Sales & invoices', icon: Receipt, adminOnly: true },
   { group: 'Selling', to: '/customers', label: 'Customers', icon: Users, adminOnly: true },
   { group: 'Finance', to: '/expenses', label: 'Expenses', icon: Wallet, adminOnly: true },
-  { group: 'Finance', to: '/reports', label: 'Reports & profit', icon: BarChart3, adminOnly: true },
+  { group: 'Finance', to: '/reports', label: 'Reports & profit', icon: BarChart3, adminOnly: true, permission: 'canViewReports' },
   { group: 'Admin', to: '/users', label: 'Staff & cashiers', icon: UserCheck, adminOnly: true },
+  { group: 'Admin', to: '/audit-log', label: 'Audit log', icon: ScrollText, adminOnly: true },
   { group: 'Admin', to: '/settings', label: 'Settings', icon: Settings, adminOnly: true },
 ];
 
 export function Sidebar({ onCloseMobile }) {
-  const { settings, isLiveBackend, products = [] } = useStore();
-  const { isAdmin, logout } = useAuth();
+  const { settings, products = [] } = useStore();
+  const { isAdmin, logout, can } = useAuth();
   const navigate = useNavigate();
 
   // Allow collapsing sidebar to save space on laptop screens
@@ -77,7 +80,7 @@ export function Sidebar({ onCloseMobile }) {
 
   // Filter items based on user role
   const navItems = ALL_NAV_ITEMS.filter((item) => {
-    if (item.adminOnly && !isAdmin) return false;
+    if (item.adminOnly && !isAdmin && !(item.permission && can(item.permission))) return false;
     if (item.cashierOnly && isAdmin) return false;
     return true;
   });
@@ -170,30 +173,6 @@ export function Sidebar({ onCloseMobile }) {
 
       {/* Footer */}
       <div className="p-2.5 border-t border-slate-200 space-y-1">
-        <NavLink
-          to={isAdmin ? '/settings' : '/counter'}
-          onClick={onCloseMobile}
-          title={isLiveBackend ? `${api.backendName} connected` : 'Local mode'}
-          className={`flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-slate-300 transition-colors ${
-            isCollapsed ? 'justify-center h-9' : 'px-2.5 py-2'
-          }`}
-        >
-          <span className="relative flex w-2 h-2 shrink-0">
-            {isLiveBackend && <span className="absolute inset-0 rounded-full bg-brand-500 opacity-60 animate-ping" />}
-            <span className={`relative w-2 h-2 rounded-full ${isLiveBackend ? 'bg-brand-500' : 'bg-amber-500'}`} />
-          </span>
-          {!isCollapsed && (
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-slate-800 truncate leading-4">
-                {isLiveBackend ? `${api.backendName} connected` : 'Local mode'}
-              </p>
-              <p className="text-xs text-slate-500 truncate leading-4">
-                {isLiveBackend ? 'Auto-synced' : isAdmin ? 'Click to connect' : 'Saved on this computer'}
-              </p>
-            </div>
-          )}
-        </NavLink>
-
         <div className={`flex ${isCollapsed ? 'flex-col' : ''} gap-1`}>
           <button
             type="button"

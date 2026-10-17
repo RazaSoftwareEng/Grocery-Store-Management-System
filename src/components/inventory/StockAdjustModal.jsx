@@ -30,7 +30,7 @@ export function StockAdjustModal({
   product,
   onSuccess,
 }) {
-  const { refreshAllData } = useStore();
+  const { refreshProducts } = useStore();
   const { showToast } = useToast();
 
   const [adjustmentType, setAdjustmentType] = useState('ADD'); // 'ADD', 'SUBTRACT', 'SET'
@@ -95,12 +95,11 @@ export function StockAdjustModal({
         adjustmentType,
         quantity: qtyNum,
         reason: finalReason,
-        createdBy: 'Store Manager',
       });
 
       if (res.success) {
         showToast(`Stock for "${product.name}" is now ${projectedStock} ${product.unit}`, 'success');
-        await refreshAllData();
+        await refreshProducts();
         if (onSuccess) onSuccess();
         onClose();
       } else {

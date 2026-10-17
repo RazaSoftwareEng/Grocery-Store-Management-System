@@ -1,22 +1,19 @@
 /**
- * Supabase Backend Service
- * Same method names and { success, data, error } response shape as the
- * Google Apps Script / local demo services, so pages work unchanged.
+ * Supabase Backend Service (the only API layer).
+ * Every method resolves to { success, data, error } (plus `count` for paged lists).
  *
  * Database columns are snake_case; the app uses camelCase. Rows are
- * converted in both directions here. Multi-step writes (sales, cancellations,
- * stock, purchases, payments, users) run as Postgres functions defined in
- * supabase/schema.sql so they are atomic.
+ * converted here. Money and stock writes run as Postgres functions defined in
+ * supabase/schema.sql, which compute prices and balances on the server.
  */
 
 import { supabase } from './supabaseClient';
-import { mockDataService } from './mockDataService';
 import { buildCashierSummary } from '../utils/cashierSummary';
+import { dayStartIso, nextDayStartIso, todayStr, addDays, setStoreTimeZone } from '../utils/dates';
 
 // Staff usernames map to Supabase Auth emails (must match schema.sql)
 const AUTH_EMAIL_DOMAIN = 'grocery.local';
 const PAGE_SIZE = 1000;
-const TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Karachi';
 
 const DEFAULT_SETTINGS = {
   storeName: 'Bismillah Grocery & Supermarket',
@@ -30,6 +27,20 @@ const DEFAULT_SETTINGS = {
   receiptType: 'thermal80',
   allowNegativeStock: 'false',
   lowStockDefaultThreshold: '5',
+  timezone: 'Asia/Karachi',
+  cashierMaxDiscountPercent: '10',
+  expiryAlertDays: '30',
+  autoLockMinutes: '15',
+  ntn: '',
+  strn: '',
+};
+
+// Friendly messages for database constraint errors
+const CONSTRAINT_MESSAGES = {
+  customers_phone_digits_key: 'A customer with this phone number already exists',
+  products_sku_key: 'This SKU is already used by another product',
+  products_barcode_key: 'This barcode is already used by another product',
+  expense_categories_code_key: 'An expense category with this code already exists',
 };
 
 // ---------- helpers ----------
@@ -54,8 +65,15 @@ function num(val, fallback = 0) {
 
 const textOr = (val, fallback = '') => (val === null || val === undefined ? fallback : String(val));
 
+function friendly(message) {
+  for (const [key, msg] of Object.entries(CONSTRAINT_MESSAGES)) {
+    if (message.includes(key)) return msg;
+  }
+  return message;
+}
+
 function check({ data, error }) {
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(friendly(error.message));
   return data;
 }
 
@@ -73,30 +91,33 @@ async function rpc(fn, args) {
   return check(await supabase.rpc(fn, args));
 }
 
-// Run a handler and convert thrown errors into { success: false, error }
+// Server-side page: { data, count }
+async function page(query, { page: pg = 1, pageSize = 20 } = {}) {
+  const from = (Math.max(1, pg) - 1) * pageSize;
+  const { data, error, count } = await query.range(from, from + pageSize - 1);
+  if (error) throw new Error(friendly(error.message));
+  return { success: true, data: toCamel(data || []), count: count || 0 };
+}
+
+// Strip characters that would break a PostgREST or() filter
+const cleanSearch = (s) => String(s || '').trim().replace(/[,()*%\\]/g, ' ').trim();
+
+// Run a handler and convert thrown errors into { success: false, error }.
+// "APPROVAL_REQUIRED: reason" from the database sets needsApproval.
 async function run(fn) {
   try {
     return await fn();
   } catch (err) {
+    const msg = err.message || 'Database request failed';
+    const m = msg.match(/APPROVAL_REQUIRED:\s*(.*)$/);
+    if (m) return { success: false, needsApproval: true, error: m[1] };
     console.error('Supabase request failed:', err);
-    return { success: false, error: err.message || 'Database request failed' };
+    return { success: false, error: msg };
   }
 }
 
-function localDateStr(d) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-// Start of a local calendar day ('YYYY-MM-DD') as an ISO timestamp
-const localDayStartIso = (dateStr) => new Date(`${dateStr}T00:00:00`).toISOString();
-function localNextDayStartIso(dateStr) {
-  const d = new Date(`${dateStr}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString();
-}
-
 function mapUser(profile) {
+  if (!profile) return null;
   return {
     userId: profile.id,
     username: profile.username,
@@ -105,26 +126,24 @@ function mapUser(profile) {
     email: profile.email || '',
     status: profile.status || 'ACTIVE',
     createdAt: profile.created_at,
+    lastLoginAt: profile.last_login_at || null,
+    mustChangePassword: Boolean(profile.must_change_password),
+    permissions: profile.permissions || {},
+    effectivePermissions: profile.effective_permissions || null,
+    hasManagerPin: Boolean(profile.has_manager_pin),
   };
+}
+
+function dateRange(q, column, startDate, endDate) {
+  if (startDate) q = q.gte(column, dayStartIso(startDate));
+  if (endDate) q = q.lt(column, nextDayStartIso(endDate));
+  return q;
 }
 
 // ---------- service ----------
 
 export const supabaseService = {
   backendName: 'Supabase',
-
-  // Interface compatibility with the Apps Script service
-  isLive: () => true,
-  getEndpointUrl: () => import.meta.env.VITE_SUPABASE_URL || '',
-  setEndpointUrl: () => {},
-  setForceLocal: () => {},
-
-  async testConnection() {
-    return run(async () => {
-      check(await supabase.from('settings').select('key').limit(1));
-      return { success: true, message: 'Supabase database is connected and online' };
-    });
-  },
 
   // ----- auth -----
 
@@ -133,22 +152,20 @@ export const supabaseService = {
       const uname = String(username || '').trim().toLowerCase();
       const email = uname.includes('@') ? uname : `${uname}@${AUTH_EMAIL_DOMAIN}`;
 
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password: String(password || '') });
+      const { error } = await supabase.auth.signInWithPassword({ email, password: String(password || '') });
       if (error) {
         const msg = /invalid login credentials/i.test(error.message) ? 'Invalid username or password' : error.message;
         return { success: false, error: msg };
       }
-
-      const profile = check(await supabase.from('profiles').select('*').eq('id', data.user.id).maybeSingle());
-      if (!profile) {
+      try {
+        const profile = await rpc('record_login');
+        if (!profile || profile.status !== 'ACTIVE') throw new Error('This user account is inactive. Contact the store manager.');
+        return { success: true, user: mapUser(profile) };
+      } catch (e) {
         await supabase.auth.signOut();
-        return { success: false, error: 'No staff profile found for this account. Ask the store manager.' };
+        return { success: false, error: /no active staff profile/i.test(e.message)
+          ? 'No active staff profile for this account. Ask the store manager.' : e.message };
       }
-      if (profile.status !== 'ACTIVE') {
-        await supabase.auth.signOut();
-        return { success: false, error: 'This user account is inactive. Contact the store manager.' };
-      }
-      return { success: true, user: mapUser(profile) };
     });
   },
 
@@ -159,54 +176,80 @@ export const supabaseService = {
   // Returns the signed-in staff user, or null if there is no valid session
   async getCurrentUser() {
     const { data } = await supabase.auth.getSession();
-    const authUser = data?.session?.user;
-    if (!authUser) return null;
-    const { data: profile } = await supabase.from('profiles').select('*').eq('id', authUser.id).maybeSingle();
-    return profile && profile.status === 'ACTIVE' ? mapUser(profile) : null;
+    if (!data?.session?.user) return null;
+    const { data: profile, error } = await supabase.rpc('my_profile');
+    if (error) return undefined; // network problem: keep the cached user
+    return profile ? mapUser(profile) : null;
+  },
+
+  async changeOwnPassword(oldPassword, newPassword) {
+    return run(async () => {
+      await rpc('change_own_password', { p_old: oldPassword, p_new: newPassword });
+      return { success: true, message: 'Password changed' };
+    });
+  },
+
+  async verifyOwnPassword(password) {
+    return run(async () => ({ success: true, data: Boolean(await rpc('verify_own_password', { p_password: password })) }));
+  },
+
+  async setManagerPin(pin) {
+    return run(async () => {
+      await rpc('set_manager_pin', { p_pin: pin });
+      return { success: true, message: 'Manager PIN saved' };
+    });
+  },
+
+  // { success, data: { token, approvedBy, expiresAt } }
+  async verifyManagerPin(pin) {
+    return run(async () => {
+      const res = await rpc('verify_manager_pin', { p_pin: String(pin || '') });
+      if (!res?.success) return { success: false, error: res?.error || 'Wrong manager PIN' };
+      return { success: true, data: res };
+    });
+  },
+
+  async getPublicStoreInfo() {
+    return run(async () => ({ success: true, data: (await rpc('public_store_info')) || {} }));
   },
 
   // ----- dashboard & initial load -----
 
   async getDashboardStats() {
     return run(async () => {
-      const raw = await rpc('dashboard_stats', { p_tz: TIME_ZONE });
+      const raw = await rpc('dashboard_stats');
       const { dailySales = {}, recentSales = [], ...rest } = raw || {};
-
+      const today = todayStr();
       const weeklySalesTrend = [];
       for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const date = localDateStr(d);
+        const date = addDays(today, -i);
+        const d = new Date(`${date}T12:00:00Z`);
         weeklySalesTrend.push({
           date,
-          label: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+          label: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }),
           sales: num(dailySales[date]),
         });
       }
-
       return { success: true, data: { ...rest, recentSales: toCamel(recentSales), weeklySalesTrend } };
     });
   },
 
-  async getInitialStoreData() {
+  async getInitialStoreData({ isAdmin = false } = {}) {
     return run(async () => {
-      const [productsRes, categoriesRes, customersRes, settingsRes, usersRes, statsRes] = await Promise.all([
+      const [productsRes, categoriesRes, settingsRes, usersRes, statsRes] = await Promise.all([
         this.getProducts(),
         this.getCategories(),
-        this.getCustomers(),
         this.getSettings(),
-        this.getUsers(),
-        this.getDashboardStats(),
+        isAdmin ? this.getUsers() : Promise.resolve({ success: true, data: [] }),
+        isAdmin ? this.getDashboardStats() : Promise.resolve({ success: true, data: null }),
       ]);
-      const failed = [productsRes, categoriesRes, customersRes, settingsRes].find((r) => !r.success);
+      const failed = [productsRes, categoriesRes, settingsRes].find((r) => !r.success);
       if (failed) return failed;
-
       return {
         success: true,
         data: {
           products: productsRes.data,
           categories: categoriesRes.data,
-          customers: customersRes.data,
           settings: settingsRes.data,
           users: usersRes.success ? usersRes.data : [],
           dashboardStats: statsRes.success ? statsRes.data : null,
@@ -220,72 +263,56 @@ export const supabaseService = {
   async getProducts() {
     return run(async () => {
       const [products, categories] = await Promise.all([
-        fetchAll(() => supabase.from('products').select('*').order('name')),
+        fetchAll(() => supabase.from('products').select('*').order('name').order('product_id')),
         fetchAll(() => supabase.from('categories').select('category_id, name')),
       ]);
       const catMap = Object.fromEntries(categories.map((c) => [c.category_id, c.name]));
-      const data = products.map((p) => ({ ...toCamel(p), categoryName: catMap[p.category_id] || 'General' }));
-      return { success: true, data };
+      return { success: true, data: products.map((p) => ({ ...toCamel(p), categoryName: catMap[p.category_id] || 'General' })) };
     });
+  },
+
+  // Live stock updates from other counters. Returns an unsubscribe function.
+  subscribeProducts(onChange) {
+    const channel = supabase
+      .channel('products-stock')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (payload) => {
+        onChange({
+          type: payload.eventType,
+          product: payload.new && Object.keys(payload.new).length ? toCamel(payload.new) : null,
+          oldId: payload.old?.product_id,
+        });
+      })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
   },
 
   async saveProduct(productData) {
     return run(async () => {
-      const now = new Date().toISOString();
-      const id = productData.productId && !String(productData.productId).startsWith('PROD-TEMP-')
-        ? productData.productId
-        : null;
-
-      const fields = {
-        name: productData.name,
-        sku: productData.sku || `SKU-${Math.floor(100000 + Math.random() * 900000)}`,
-        barcode: textOr(productData.barcode),
-        category_id: productData.categoryId || null,
-        unit: productData.unit || 'piece',
-        cost_price: num(productData.costPrice),
-        selling_price: num(productData.sellingPrice),
-        minimum_stock: num(productData.minimumStock, 5),
-        expiry_date: productData.expiryDate || null,
-        status: productData.status || 'ACTIVE',
-        updated_at: now,
-      };
-
-      if (id) {
-        const row = check(await supabase.from('products').update(fields).eq('product_id', id).select().single());
-        return { success: true, data: toCamel(row), message: 'Product updated successfully' };
-      }
-
-      const initialStock = num(productData.currentStock);
-      const row = check(
-        await supabase.from('products').insert({ ...fields, current_stock: initialStock, status: 'ACTIVE' }).select().single()
-      );
-      if (initialStock > 0) {
-        check(await supabase.from('stock_movements').insert({
-          product_id: row.product_id,
-          movement_type: 'INITIAL_STOCK',
-          quantity: initialStock,
-          previous_stock: 0,
-          new_stock: initialStock,
-          reference_type: 'MANUAL',
-          reference_id: row.product_id,
-          reason: 'Initial inventory creation',
-          created_by: 'Admin',
-        }));
-      }
-      return { success: true, data: toCamel(row), message: 'Product created successfully' };
+      const id = productData.productId && !String(productData.productId).startsWith('PROD-TEMP-') ? productData.productId : null;
+      const row = await rpc('save_product', {
+        p: {
+          productId: id,
+          name: productData.name,
+          sku: productData.sku || '',
+          barcode: textOr(productData.barcode),
+          categoryId: productData.categoryId || '',
+          unit: productData.unit || 'piece',
+          costPrice: num(productData.costPrice),
+          sellingPrice: num(productData.sellingPrice),
+          minimumStock: num(productData.minimumStock, 5),
+          expiryDate: productData.expiryDate || '',
+          status: productData.status || 'ACTIVE',
+          currentStock: num(productData.currentStock),
+        },
+      });
+      return { success: true, data: toCamel(row), message: id ? 'Product updated successfully' : 'Product created successfully' };
     });
   },
 
   async deleteProduct(productId, permanent = false) {
     return run(async () => {
-      if (permanent) {
-        check(await supabase.from('products').delete().eq('product_id', productId));
-        return { success: true, message: 'Product permanently deleted' };
-      }
-      check(await supabase.from('products')
-        .update({ status: 'INACTIVE', updated_at: new Date().toISOString() })
-        .eq('product_id', productId));
-      return { success: true, message: 'Product marked as inactive' };
+      const message = await rpc('delete_product', { p_product_id: productId, p_permanent: Boolean(permanent) });
+      return { success: true, message };
     });
   },
 
@@ -296,7 +323,6 @@ export const supabaseService = {
         p_adjustment_type: data.adjustmentType,
         p_quantity: num(data.quantity),
         p_reason: data.reason || '',
-        p_created_by: data.createdBy || 'Manager',
       });
       return { success: true, message: 'Stock adjusted successfully', currentStock: num(currentStock) };
     });
@@ -312,8 +338,7 @@ export const supabaseService = {
       ]);
       const counts = {};
       products.forEach((p) => { counts[p.category_id] = (counts[p.category_id] || 0) + 1; });
-      const data = categories.map((c) => ({ ...toCamel(c), productCount: counts[c.category_id] || 0 }));
-      return { success: true, data };
+      return { success: true, data: categories.map((c) => ({ ...toCamel(c), productCount: counts[c.category_id] || 0 })) };
     });
   },
 
@@ -349,68 +374,142 @@ export const supabaseService = {
 
   // ----- sales -----
 
-  async createSale(saleData) {
+  /**
+   * Only ids, quantities and discounts are sent. The database reads prices,
+   * applies discount then tax, and checks stock, limits and khata.
+   */
+  async createSale({ customerId, items, discount, payments, notes, approvalToken }) {
     return run(async () => {
-      const result = await rpc('create_sale', { p: saleData });
+      const result = await rpc('create_sale', {
+        p: {
+          customerId: customerId || 'WALK-IN',
+          items: (items || []).map((i) => ({ productId: i.productId, quantity: num(i.quantity), discount: num(i.discount) })),
+          discount: num(discount),
+          payments: (payments || []).map((t) => ({ method: t.method, amount: num(t.amount), reference: t.reference || '' })),
+          notes: notes || '',
+          approvalToken: approvalToken || null,
+        },
+      });
       return { success: true, message: 'Sale completed successfully', data: toCamel(result) };
     });
   },
 
-  async cancelSale(data) {
+  async cancelSale({ saleId, reason, refundMethod }) {
     return run(async () => {
-      const message = await rpc('cancel_sale', {
-        p_sale_id: data.saleId,
-        p_reason: data.reason || '',
-        p_authorized_by: data.authorizedBy || 'Manager',
-      });
+      const message = await rpc('cancel_sale', { p_sale_id: saleId, p_reason: reason || '', p_refund_method: refundMethod || 'CASH' });
       return { success: true, message };
+    });
+  },
+
+  async returnSaleItems({ saleId, items, reason, refundMethod, approvalToken }) {
+    return run(async () => {
+      const data = await rpc('return_sale_items', {
+        p_sale_id: saleId,
+        p_items: items.map((i) => ({ saleItemId: i.saleItemId, qty: num(i.qty) })),
+        p_reason: reason || '',
+        p_refund_method: refundMethod || 'CASH',
+        p_approval_token: approvalToken || null,
+      });
+      return { success: true, data: toCamel(data), message: 'Return recorded and stock restored' };
     });
   },
 
   async getSales(params = {}) {
     return run(async () => {
-      const rows = await fetchAll(() => {
-        let q = supabase.from('sales').select('*');
-        if (params.status) q = q.eq('status', params.status);
-        if (params.paymentMethod) q = q.eq('payment_method', params.paymentMethod);
-        if (params.startDate && params.endDate) {
-          q = q.gte('date', localDayStartIso(params.startDate)).lt('date', localNextDayStartIso(params.endDate));
-        }
-        return q.order('date', { ascending: false }).order('sale_id');
-      });
-      return { success: true, data: toCamel(rows) };
+      let q = supabase.from('sales').select('*', { count: 'exact' });
+      if (params.status === 'RETURNED') q = q.gt('returned_total', 0).eq('status', 'COMPLETED');
+      else if (params.status) q = q.eq('status', params.status);
+      if (params.paymentMethod) q = q.eq('payment_method', params.paymentMethod);
+      if (params.cashierId) q = q.eq('cashier_id', params.cashierId);
+      if (params.customerId) q = q.eq('customer_id', params.customerId);
+      q = dateRange(q, 'date', params.startDate, params.endDate);
+      const s = cleanSearch(params.search);
+      if (s) q = q.or(`invoice_number.ilike.*${s}*,customer_name.ilike.*${s}*,cashier_name.ilike.*${s}*`);
+      q = q.order('date', { ascending: false }).order('sale_id');
+      if (params.all) {
+        const rows = check(await q.limit(5000));
+        return { success: true, data: toCamel(rows) };
+      }
+      return page(q, params);
     });
   },
 
   async getSaleDetails(saleId) {
-    return run(async () => {
-      const [sale, items] = await Promise.all([
-        supabase.from('sales').select('*').eq('sale_id', saleId).maybeSingle().then(check),
-        supabase.from('sale_items').select('*').eq('sale_id', saleId).order('created_at').then(check),
-      ]);
-      if (!sale) return { success: false, error: 'Sale not found' };
-      return { success: true, data: { sale: toCamel(sale), items: toCamel(items) } };
-    });
+    return run(async () => ({ success: true, data: toCamel(await rpc('get_sale_details', { p_sale_id: saleId })) }));
   },
 
   // Today's bills for one counter cashier (database only returns a cashier's own bills)
   async getCashierSummary(cashierId) {
     return run(async () => {
-      let q = supabase.from('sales').select('*').gte('date', localDayStartIso(localDateStr(new Date())));
+      let q = supabase.from('sales').select('*').gte('date', dayStartIso(todayStr()));
       if (cashierId) q = q.eq('cashier_id', cashierId);
-      const rows = check(await q.order('date', { ascending: false }));
+      const rows = check(await q.order('date', { ascending: false }).limit(1000));
       return { success: true, data: buildCashierSummary(toCamel(rows), cashierId) };
+    });
+  },
+
+  // ----- shifts -----
+
+  async getCurrentShift() {
+    return run(async () => ({ success: true, data: await rpc('current_shift') }));
+  },
+
+  async openShift(openingCash, notes = '') {
+    return run(async () => ({ success: true, data: await rpc('open_shift', { p_opening_cash: num(openingCash), p_notes: notes }), message: 'Shift opened' }));
+  },
+
+  async closeShift({ shiftId, countedCash, notes }) {
+    return run(async () => ({
+      success: true,
+      data: await rpc('close_shift', { p_shift_id: shiftId || null, p_counted_cash: num(countedCash), p_notes: notes || '' }),
+      message: 'Shift closed',
+    }));
+  },
+
+  async getShiftSummary(shiftId) {
+    return run(async () => ({ success: true, data: await rpc('shift_summary', { p_shift_id: shiftId }) }));
+  },
+
+  async listShifts(startDate, endDate) {
+    return run(async () => ({ success: true, data: toCamel(await rpc('list_shifts', { p_start: startDate, p_end: endDate })) }));
+  },
+
+  // ----- held bills -----
+
+  async getHeldBills() {
+    return run(async () => {
+      const rows = check(await supabase.from('held_bills').select('*').order('created_at', { ascending: false }).limit(100));
+      return { success: true, data: toCamel(rows) };
+    });
+  },
+
+  async holdBill({ cart, customer, billDiscount, note }) {
+    return run(async () => {
+      const row = check(await supabase.from('held_bills')
+        .insert({ cart, customer: customer || {}, bill_discount: num(billDiscount), note: note || '' })
+        .select().single());
+      return { success: true, data: toCamel(row), message: 'Bill put on hold' };
+    });
+  },
+
+  async deleteHeldBill(holdId) {
+    return run(async () => {
+      check(await supabase.from('held_bills').delete().eq('hold_id', holdId));
+      return { success: true };
     });
   },
 
   // ----- purchases & suppliers -----
 
-  async getPurchases() {
+  async getPurchases(params = {}) {
     return run(async () => {
-      const rows = await fetchAll(() =>
-        supabase.from('purchases').select('*, items:purchase_items(*)').order('date', { ascending: false }).order('purchase_id')
-      );
-      return { success: true, data: toCamel(rows) };
+      let q = supabase.from('purchases').select('*, items:purchase_items(*)', { count: 'exact' });
+      if (params.status) q = q.eq('status', params.status);
+      if (params.supplierId) q = q.eq('supplier_id', params.supplierId);
+      const s = cleanSearch(params.search);
+      if (s) q = q.or(`purchase_number.ilike.*${s}*,supplier_name.ilike.*${s}*`);
+      q = q.order('date', { ascending: false }).order('purchase_id');
+      return page(q, params);
     });
   },
 
@@ -421,16 +520,40 @@ export const supabaseService = {
     });
   },
 
-  async confirmPurchase(purchaseId) {
+  async updatePurchase(purchaseId, purchaseData) {
     return run(async () => {
-      const message = await rpc('confirm_purchase', { p_purchase_id: purchaseId });
-      return { success: true, message };
+      const row = await rpc('update_purchase', { p_purchase_id: purchaseId, p: purchaseData });
+      return { success: true, data: toCamel(row), message: 'Purchase order updated' };
     });
+  },
+
+  async cancelPurchase(purchaseId, reason) {
+    return run(async () => ({ success: true, message: await rpc('cancel_purchase', { p_purchase_id: purchaseId, p_reason: reason || '' }) }));
+  },
+
+  // items: [{ purchaseItemId, qty }] or null for everything still due
+  async receivePurchase(purchaseId, items = null) {
+    return run(async () => {
+      const data = await rpc('receive_purchase', { p_purchase_id: purchaseId, p_items: items });
+      return { success: true, data, message: data.status === 'RECEIVED' ? 'Order fully received' : 'Partial delivery received' };
+    });
+  },
+
+  async confirmPurchase(purchaseId) {
+    return this.receivePurchase(purchaseId, null);
+  },
+
+  async returnPurchase(purchaseId, items, reason) {
+    return run(async () => ({
+      success: true,
+      data: await rpc('return_purchase', { p_purchase_id: purchaseId, p_items: items, p_reason: reason || '' }),
+      message: 'Goods returned to supplier',
+    }));
   },
 
   async getSuppliers() {
     return run(async () => {
-      const rows = await fetchAll(() => supabase.from('suppliers').select('*').order('name'));
+      const rows = check(await supabase.from('suppliers').select('*').order('name').limit(5000));
       return { success: true, data: toCamel(rows) };
     });
   },
@@ -459,21 +582,57 @@ export const supabaseService = {
 
   async recordSupplierPayment(data) {
     return run(async () => {
-      const newBal = await rpc('record_supplier_payment', {
+      const row = await rpc('record_supplier_payment', {
         p_supplier_id: data.supplierId,
         p_amount: num(data.amount),
         p_reference: data.reference || '',
+        p_purchase_id: data.purchaseId || null,
+        p_method: data.method || 'CASH',
       });
-      return { success: true, message: `Supplier payment recorded. New balance: ${num(newBal)}` };
+      return { success: true, data: toCamel(row), message: `Supplier payment recorded. New balance: ${num(row?.balance_after)}` };
+    });
+  },
+
+  async getSupplierLedger(supplierId, { startDate, endDate } = {}) {
+    return run(async () => {
+      let q = supabase.from('supplier_ledger').select('*').eq('supplier_id', supplierId);
+      q = dateRange(q, 'created_at', startDate, endDate);
+      const rows = check(await q.order('created_at').order('entry_id').limit(5000));
+      return { success: true, data: toCamel(rows) };
     });
   },
 
   // ----- customers -----
 
-  async getCustomers() {
+  async getCustomers(params = {}) {
     return run(async () => {
-      const rows = await fetchAll(() => supabase.from('customers').select('*').order('name'));
-      return { success: true, data: toCamel(rows) };
+      let q = supabase.from('customers').select('*', { count: 'exact' }).neq('customer_id', 'WALK-IN');
+      const s = cleanSearch(params.search);
+      if (s) {
+        const digits = s.replace(/\D/g, '');
+        q = q.or([`name.ilike.*${s}*`, `customer_id.ilike.*${s}*`, digits ? `phone_digits.like.*${digits}*` : null].filter(Boolean).join(','));
+      }
+      if (params.filter === 'OWING') q = q.gt('outstanding_balance', 0);
+      if (params.filter === 'ADVANCE') q = q.lt('outstanding_balance', 0);
+      if (params.status) q = q.eq('status', params.status);
+      q = params.filter === 'OWING' ? q.order('outstanding_balance', { ascending: false }) : q.order('name');
+      return page(q.order('customer_id'), params);
+    });
+  },
+
+  // POS lookup: walk-in first, then up to 20 matches
+  async searchCustomers(term) {
+    return run(async () => {
+      const res = await this.getCustomers({ search: term, status: 'ACTIVE', page: 1, pageSize: 20 });
+      if (!res.success) return res;
+      return { success: true, data: res.data };
+    });
+  },
+
+  async getCustomer(customerId) {
+    return run(async () => {
+      const row = check(await supabase.from('customers').select('*').eq('customer_id', customerId).maybeSingle());
+      return { success: true, data: toCamel(row) };
     });
   },
 
@@ -484,7 +643,7 @@ export const supabaseService = {
         phone: custData.phone || '',
         email: custData.email || '',
         address: custData.address || '',
-        credit_limit: num(custData.creditLimit, 10000),
+        credit_limit: num(custData.creditLimit, 0),
         notes: custData.notes || '',
         status: custData.status || 'ACTIVE',
         updated_at: new Date().toISOString(),
@@ -494,7 +653,7 @@ export const supabaseService = {
         return { success: true, data: toCamel(row), message: 'Customer updated' };
       }
       const row = check(await supabase.from('customers')
-        .insert({ ...fields, status: 'ACTIVE', outstanding_balance: 0 })
+        .insert({ ...fields, status: 'ACTIVE', outstanding_balance: num(custData.openingBalance) })
         .select().single());
       return { success: true, data: toCamel(row), message: 'Customer created' };
     });
@@ -502,23 +661,48 @@ export const supabaseService = {
 
   async recordCustomerPayment(data) {
     return run(async () => {
-      const newBal = await rpc('record_customer_payment', {
+      const row = await rpc('record_customer_payment', {
         p_customer_id: data.customerId,
         p_amount: num(data.amount),
+        p_method: data.method || 'CASH',
+        p_notes: data.notes || '',
+        p_reference: data.reference || '',
       });
-      return { success: true, message: `Customer payment recorded. Remaining balance: ${num(newBal)}` };
+      const entry = toCamel(row);
+      return { success: true, data: entry, message: `Customer payment recorded. Remaining balance: ${num(entry.balanceAfter)}` };
     });
+  },
+
+  async adjustCustomerBalance(customerId, amount, notes) {
+    return run(async () => ({
+      success: true,
+      data: toCamel(await rpc('adjust_customer_balance', { p_customer_id: customerId, p_amount: num(amount), p_notes: notes })),
+      message: 'Balance adjusted',
+    }));
+  },
+
+  async getCustomerLedger(customerId, { startDate, endDate } = {}) {
+    return run(async () => {
+      let q = supabase.from('customer_ledger').select('*').eq('customer_id', customerId);
+      q = dateRange(q, 'created_at', startDate, endDate);
+      const rows = check(await q.order('created_at').order('entry_id').limit(5000));
+      return { success: true, data: toCamel(rows) };
+    });
+  },
+
+  async getCustomerAging() {
+    return run(async () => ({ success: true, data: (await rpc('customer_aging')) || [] }));
   },
 
   // ----- expenses -----
 
   async getExpenses(params = {}) {
     return run(async () => {
-      const rows = await fetchAll(() => {
-        let q = supabase.from('expenses').select('*');
-        if (params.startDate && params.endDate) q = q.gte('date', params.startDate).lte('date', params.endDate);
-        return q.order('date', { ascending: false }).order('created_at', { ascending: false });
-      });
+      let q = supabase.from('expenses').select('*');
+      if (params.startDate) q = q.gte('date', params.startDate);
+      if (params.endDate) q = q.lte('date', params.endDate);
+      if (params.status) q = q.eq('status', params.status);
+      const rows = check(await q.order('date', { ascending: false }).order('created_at', { ascending: false }).limit(5000));
       return { success: true, data: toCamel(rows) };
     });
   },
@@ -529,48 +713,130 @@ export const supabaseService = {
         title: data.title,
         category: data.category || 'MISCELLANEOUS',
         amount: num(data.amount),
-        date: data.date || localDateStr(new Date()),
+        date: data.date || todayStr(),
         payment_method: data.paymentMethod || 'CASH',
         reference: data.reference || '',
         notes: data.notes || '',
-        created_by: data.createdBy || 'Admin',
+        paid_from_drawer: Boolean(data.paidFromDrawer),
       };
       const row = data.expenseId
         ? check(await supabase.from('expenses').update(fields).eq('expense_id', data.expenseId).select().single())
         : check(await supabase.from('expenses').insert(fields).select().single());
-      return { success: true, data: toCamel(row), message: 'Expense recorded' };
+      return { success: true, data: toCamel(row), message: data.expenseId ? 'Expense updated' : 'Expense recorded' };
     });
   },
 
-  async deleteExpense(expenseId) {
+  async voidExpense(expenseId, reason) {
     return run(async () => {
-      check(await supabase.from('expenses').delete().eq('expense_id', expenseId));
-      return { success: true, message: 'Expense deleted' };
+      await rpc('void_expense', { p_expense_id: expenseId, p_reason: reason || '' });
+      return { success: true, message: 'Expense voided' };
     });
   },
 
-  // ----- stock movements & reports -----
-
-  async getStockMovements(params = {}) {
+  async getExpenseCategories() {
     return run(async () => {
-      let q = supabase.from('stock_movements').select('*');
-      if (params.productId) q = q.eq('product_id', params.productId);
-      const rows = check(await q.order('created_at', { ascending: false }).limit(200));
+      const rows = check(await supabase.from('expense_categories').select('*').order('sort_order').order('name'));
       return { success: true, data: toCamel(rows) };
     });
   },
 
+  async saveExpenseCategory(cat) {
+    return run(async () => {
+      const fields = { name: cat.name, status: cat.status || 'ACTIVE', sort_order: num(cat.sortOrder, 100) };
+      if (cat.categoryId) {
+        const row = check(await supabase.from('expense_categories').update(fields).eq('category_id', cat.categoryId).select().single());
+        return { success: true, data: toCamel(row), message: 'Category updated' };
+      }
+      const code = String(cat.code || cat.name).toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 30);
+      const row = check(await supabase.from('expense_categories').insert({ ...fields, code }).select().single());
+      return { success: true, data: toCamel(row), message: 'Category added' };
+    });
+  },
+
+  // ----- stock movements & counts -----
+
+  async getStockMovements(params = {}) {
+    return run(async () => {
+      let q = supabase.from('stock_movements').select('*', { count: 'exact' });
+      if (params.productId) q = q.eq('product_id', params.productId);
+      if (params.type) q = q.eq('movement_type', params.type);
+      q = dateRange(q, 'created_at', params.startDate, params.endDate);
+      q = q.order('created_at', { ascending: false }).order('movement_id');
+      return page(q, params);
+    });
+  },
+
+  async getStockCounts() {
+    return run(async () => {
+      const rows = check(await supabase.from('stock_counts').select('*').order('created_at', { ascending: false }).limit(200));
+      return { success: true, data: toCamel(rows) };
+    });
+  },
+
+  async getStockCount(countId) {
+    return run(async () => {
+      const [count, items] = await Promise.all([
+        supabase.from('stock_counts').select('*').eq('count_id', countId).single().then(check),
+        fetchAll(() => supabase.from('stock_count_items').select('*').eq('count_id', countId).order('product_name')),
+      ]);
+      return { success: true, data: { count: toCamel(count), items: toCamel(items) } };
+    });
+  },
+
+  async startStockCount(categoryId, notes) {
+    return run(async () => ({
+      success: true,
+      data: toCamel(await rpc('start_stock_count', { p_category_id: categoryId || null, p_notes: notes || '' })),
+      message: 'Stock count started',
+    }));
+  },
+
+  // items: [{ itemId, countedQty }]  (countedQty '' = not counted)
+  async saveStockCountItems(items) {
+    return run(async () => {
+      const now = new Date().toISOString();
+      for (let i = 0; i < items.length; i += 25) {
+        await Promise.all(items.slice(i, i + 25).map((it) =>
+          supabase.from('stock_count_items')
+            .update({ counted_qty: it.countedQty === '' || it.countedQty === null ? null : num(it.countedQty), updated_at: now })
+            .eq('item_id', it.itemId)
+            .then(check)));
+      }
+      return { success: true, message: 'Counts saved' };
+    });
+  },
+
+  async applyStockCount(countId) {
+    return run(async () => ({ success: true, data: await rpc('apply_stock_count', { p_count_id: countId }), message: 'Stock updated from count' }));
+  },
+
+  async cancelStockCount(countId) {
+    return run(async () => {
+      await rpc('cancel_stock_count', { p_count_id: countId });
+      return { success: true, message: 'Stock count cancelled' };
+    });
+  },
+
+  // ----- reports -----
+
   async getReports(params = {}) {
     return run(async () => {
-      const today = new Date();
-      const monthAgo = new Date(today.getTime() - 30 * 86400000);
-      const data = await rpc('report_stats', {
-        p_start: params.startDate || localDateStr(monthAgo),
-        p_end: params.endDate || localDateStr(today),
-        p_tz: TIME_ZONE,
-      });
-      return { success: true, data };
+      const end = params.endDate || todayStr();
+      const start = params.startDate || addDays(end, -29);
+      return { success: true, data: await rpc('report_stats', { p_start: start, p_end: end }) };
     });
+  },
+
+  async getDailyClosing(date) {
+    return run(async () => ({ success: true, data: await rpc('report_daily_closing', { p_date: date || todayStr() }) }));
+  },
+
+  async getSlowMoving(days = 30) {
+    return run(async () => ({ success: true, data: (await rpc('report_slow_moving', { p_days: num(days, 30) })) || [] }));
+  },
+
+  async getExpiryReport(days = null) {
+    return run(async () => ({ success: true, data: (await rpc('report_expiry', { p_days: days === null ? null : num(days) })) || [] }));
   },
 
   // ----- settings -----
@@ -579,19 +845,18 @@ export const supabaseService = {
     return run(async () => {
       const rows = check(await supabase.from('settings').select('key, value'));
       const stored = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-      return { success: true, data: { ...DEFAULT_SETTINGS, ...stored } };
+      const data = { ...DEFAULT_SETTINGS, ...stored };
+      setStoreTimeZone(data.timezone);
+      return { success: true, data };
     });
   },
 
   async saveSettings(settingsData) {
     return run(async () => {
       const now = new Date().toISOString();
-      const rows = Object.entries(settingsData).map(([key, value]) => ({
-        key,
-        value: textOr(value),
-        updated_at: now,
-      }));
+      const rows = Object.entries(settingsData).map(([key, value]) => ({ key, value: textOr(value), updated_at: now }));
       check(await supabase.from('settings').upsert(rows, { onConflict: 'key' }));
+      setStoreTimeZone(settingsData.timezone);
       return { success: true, message: 'Settings saved successfully' };
     });
   },
@@ -600,7 +865,9 @@ export const supabaseService = {
 
   async getUsers() {
     return run(async () => {
-      const rows = check(await supabase.from('profiles').select('*').order('created_at'));
+      const rows = check(await supabase.from('profiles')
+        .select('id, username, full_name, role, email, status, created_at, last_login_at, must_change_password, permissions')
+        .order('created_at'));
       return { success: true, data: rows.map(mapUser) };
     });
   },
@@ -615,6 +882,7 @@ export const supabaseService = {
         p_email: userData.email || '',
         p_password: userData.password || '',
         p_status: userData.status || 'ACTIVE',
+        p_permissions: userData.permissions || null,
       });
       return { success: true, data: mapUser(row), message: userData.userId ? 'User updated' : 'New user created' };
     });
@@ -627,7 +895,18 @@ export const supabaseService = {
     });
   },
 
-  // Local demo storage helpers (do not touch the Supabase database)
-  resetLocalDatabase: () => mockDataService.resetToDefaults(),
-  clearAllDummyData: () => mockDataService.clearAllDummyData(),
+  // ----- audit log -----
+
+  async getAuditLogs(params = {}) {
+    return run(async () => {
+      let q = supabase.from('audit_logs').select('*', { count: 'exact' });
+      if (params.userId) q = q.eq('user_id', params.userId);
+      if (params.action) q = q.eq('action', params.action);
+      if (params.entity) q = q.eq('entity', params.entity);
+      const s = cleanSearch(params.search);
+      if (s) q = q.or(`entity_id.ilike.*${s}*,user_name.ilike.*${s}*`);
+      q = dateRange(q, 'created_at', params.startDate, params.endDate);
+      return page(q.order('created_at', { ascending: false }).order('log_id'), params);
+    });
+  },
 };

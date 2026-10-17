@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../context/StoreContext';
 import { api } from '../services/api';
 import { Table } from '../components/common/Table';
@@ -7,55 +7,55 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { formatDate } from '../utils/formatters';
 import { exportToCsv } from '../utils/exportCsv';
+import { todayStr, addDays } from '../utils/dates';
+import { useToast } from '../context/ToastContext';
 import { Download, RefreshCw } from 'lucide-react';
 
 export function Inventory() {
   const { products } = useStore();
+  const { showToast } = useToast();
   const [movements, setMovements] = useState([]);
+  const [count, setCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState('ALL');
   const [movementType, setMovementType] = useState('ALL');
+  const [startDate, setStartDate] = useState(addDays(todayStr(), -29));
+  const [endDate, setEndDate] = useState(todayStr());
   const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 15;
+  const pageSize = 25;
 
-  const loadMovements = async () => {
-    try {
-      setIsLoading(true);
-      const res = await api.getStockMovements({
-        productId: selectedProduct === 'ALL' ? undefined : selectedProduct,
-      });
-      if (res.success) {
-        setMovements(res.data || []);
-      }
-    } catch (err) {
-      console.error('Failed to load stock movements:', err);
-    } finally {
-      setIsLoading(false);
-    }
+  const params = {
+    productId: selectedProduct === 'ALL' ? undefined : selectedProduct,
+    type: movementType === 'ALL' ? undefined : movementType,
+    startDate,
+    endDate,
   };
+
+  const loadMovements = useCallback(async () => {
+    setIsLoading(true);
+    const res = await api.getStockMovements({ ...params, page: currentPage, pageSize });
+    setIsLoading(false);
+    if (res.success) {
+      setMovements(res.data || []);
+      setCount(res.count);
+    } else showToast(res.error || 'Could not load stock movements', 'error');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProduct, movementType, startDate, endDate, currentPage, showToast]);
 
   useEffect(() => {
     loadMovements();
-  }, [selectedProduct]);
+  }, [loadMovements]);
 
-  // Map product names
   const prodMap = {};
   products.forEach((p) => {
     prodMap[p.productId] = p.name;
   });
 
-  const filteredMovements = movements.filter((m) => {
-    if (movementType !== 'ALL' && m.movementType !== movementType) return false;
-    return true;
-  });
+  const totalPages = Math.ceil(count / pageSize) || 1;
 
-  const totalPages = Math.ceil(filteredMovements.length / pageSize) || 1;
-  const paginatedMovements = filteredMovements.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  );
-
-  const handleExportCsv = () => {
+  const handleExportCsv = async () => {
+    const res = await api.getStockMovements({ ...params, page: 1, pageSize: 5000 });
+    if (!res.success) return showToast(res.error, 'error');
     const headers = [
       { key: 'createdAt', label: 'Date/Time' },
       { key: 'productName', label: 'Product Name' },
@@ -67,7 +67,7 @@ export function Inventory() {
       { key: 'reason', label: 'Reason' },
       { key: 'createdBy', label: 'Recorded By' },
     ];
-    const dataWithNames = filteredMovements.map((m) => ({
+    const dataWithNames = res.data.map((m) => ({
       ...m,
       productName: prodMap[m.productId] || m.productId,
     }));
@@ -104,7 +104,7 @@ export function Inventory() {
         if (row.movementType === 'SALE') variant = 'info';
         else if (row.movementType === 'PURCHASE') variant = 'success';
         else if (row.movementType === 'ADJUSTMENT') variant = 'warning';
-        else if (row.movementType === 'SALE_RETURN') variant = 'danger';
+        else if (row.movementType === 'SALE_RETURN' || row.movementType === 'PURCHASE_RETURN') variant = 'danger';
 
         return (
           <Badge variant={variant} size="xs">
@@ -219,16 +219,23 @@ export function Inventory() {
             <option value="PURCHASE">PURCHASE (Supplier Stock In)</option>
             <option value="ADJUSTMENT">ADJUSTMENT (Manual Corrections)</option>
             <option value="SALE_RETURN">SALE_RETURN (Restocked Returns)</option>
+            <option value="PURCHASE_RETURN">PURCHASE_RETURN (Returned to Supplier)</option>
             <option value="INITIAL_STOCK">INITIAL_STOCK</option>
           </select>
         </div>
+        <input type="date" value={startDate} max={endDate} aria-label="From date"
+          onChange={(e) => { setStartDate(e.target.value); setCurrentPage(1); }}
+          className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700" />
+        <input type="date" value={endDate} min={startDate} aria-label="To date"
+          onChange={(e) => { setEndDate(e.target.value); setCurrentPage(1); }}
+          className="px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-700" />
       </div>
 
       {/* Movements Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <Table
           columns={columns}
-          data={paginatedMovements}
+          data={movements}
           isLoading={isLoading}
           keyField="movementId"
           emptyMessage="No stock movements recorded for the selected filter."
@@ -237,7 +244,7 @@ export function Inventory() {
         <Pagination
           currentPage={currentPage}
           totalPages={totalPages}
-          totalItems={filteredMovements.length}
+          totalItems={count}
           pageSize={pageSize}
           onPageChange={setCurrentPage}
         />

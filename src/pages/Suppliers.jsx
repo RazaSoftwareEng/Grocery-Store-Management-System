@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../context/StoreContext';
 import { useToast } from '../context/ToastContext';
 import { api } from '../services/api';
@@ -7,15 +7,16 @@ import { Table } from '../components/common/Table';
 import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
-import { Input } from '../components/common/Input';
+import { Input, Select } from '../components/common/Input';
+import { LedgerStatement } from '../components/common/LedgerStatement';
 import { PageHeader } from '../components/common/Card';
 import { FormErrorSummary } from '../components/common/FormErrorSummary';
 import { useFormValidation, rules } from '../hooks/useFormValidation';
 import { SearchInput } from '../components/common/SearchInput';
-import { Plus, DollarSign, Edit, Phone, MapPin } from 'lucide-react';
+import { Plus, DollarSign, Edit, Phone, MapPin, BookOpen } from 'lucide-react';
 
 export function Suppliers() {
-  const { currencySymbol, refreshAllData } = useStore();
+  const { currencySymbol } = useStore();
   const { showToast } = useToast();
 
   const [suppliers, setSuppliers] = useState([]);
@@ -30,6 +31,22 @@ export function Suppliers() {
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statementSupplier, setStatementSupplier] = useState(null);
+  const [openPos, setOpenPos] = useState([]);
+  const [paymentPurchaseId, setPaymentPurchaseId] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('CASH');
+  const loadSupplierLedger = useCallback(
+    (start, end) => api.getSupplierLedger(statementSupplier?.supplierId, { startDate: start, endDate: end }),
+    [statementSupplier?.supplierId]
+  );
+  useEffect(() => {
+    if (!paymentSupplier) return;
+    setPaymentPurchaseId('');
+    setPaymentMethod('CASH');
+    api.getPurchases({ supplierId: paymentSupplier.supplierId, page: 1, pageSize: 100 }).then((res) => {
+      if (res.success) setOpenPos(res.data.filter((p) => p.status !== 'CANCELLED' && Number(p.outstandingBalance) > 0));
+    });
+  }, [paymentSupplier]);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -162,6 +179,8 @@ export function Suppliers() {
         supplierId: paymentSupplier.supplierId,
         amount: amt,
         reference: paymentNotes,
+        purchaseId: paymentPurchaseId || null,
+        method: paymentMethod,
       });
 
       if (res.success) {
@@ -240,6 +259,9 @@ export function Suppliers() {
       className: 'text-right',
       render: (row) => (
         <div className="flex items-center justify-end gap-1.5">
+          <Button variant="outline" size="sm" icon={BookOpen} onClick={() => setStatementSupplier(row)}>
+            Statement
+          </Button>
           {Number(row.outstandingBalance) > 0 && (
             <Button
               variant="outline"
@@ -438,9 +460,35 @@ export function Suppliers() {
               placeholder="e.g. Transfer TXN-1122"
               optional
             />
+            <div className="grid grid-cols-2 gap-3">
+              <Select
+                label="Against purchase order"
+                value={paymentPurchaseId}
+                onChange={(e) => setPaymentPurchaseId(e.target.value)}
+                options={[{ value: '', label: 'General (account)' }, ...openPos.map((p) => ({ value: p.purchaseId, label: `${p.purchaseNumber} · due ${formatCurrency(p.outstandingBalance, currencySymbol)}` }))]}
+              />
+              <Select
+                label="Method"
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value)}
+                options={[{ value: 'CASH', label: 'Cash' }, { value: 'BANK_TRANSFER', label: 'Bank transfer' }, { value: 'CHEQUE', label: 'Cheque' }, { value: 'ONLINE', label: 'Online' }]}
+              />
+            </div>
           </form>
         </Modal>
       )}
+
+      <Modal
+        isOpen={Boolean(statementSupplier)}
+        onClose={() => setStatementSupplier(null)}
+        title={statementSupplier ? `${statementSupplier.name} · statement` : ''}
+        subtitle={statementSupplier ? `You owe ${formatCurrency(statementSupplier.outstandingBalance, currencySymbol)}` : ''}
+        maxWidth="max-w-4xl"
+      >
+        {statementSupplier && (
+          <LedgerStatement party={statementSupplier} kind="supplier" load={loadSupplierLedger} debitLabel="Goods received" creditLabel="Paid / returned" />
+        )}
+      </Modal>
     </div>
   );
 }

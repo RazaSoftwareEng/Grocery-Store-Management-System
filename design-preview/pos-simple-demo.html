@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Simple POS Billing</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f5f5f2; --card: #fff; --line: #e2e2dc; --text: #1c1f1d; --muted: #6e7370;
+    --brand: #1e6b4a; --brand-dark: #165238; --brand-soft: #e8f3ed; --danger: #c0392b; --amber: #b7791f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .app { display: flex; flex-direction: column; height: 100vh; max-width: 1200px; margin: 0 auto; padding: 16px; gap: 12px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .topbar h1 { font-size: 18px; margin: 0; }
+  .topbar .meta { font-size: 13px; color: var(--muted); }
+  .chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--brand-soft); color: var(--brand-dark); font-weight: 600; }
+
+  /* Search */
+  .search { position: relative; }
+  .search input { width: 100%; height: 60px; font-size: 20px; padding: 0 20px 0 56px; border: 2px solid var(--brand); border-radius: 16px; outline: none; background: #fff; }
+  .search input:focus { box-shadow: 0 0 0 4px rgba(30,107,74,.15); }
+  .search svg { position: absolute; left: 18px; top: 18px; width: 24px; height: 24px; color: var(--muted); }
+  .search kbd { position: absolute; right: 16px; top: 18px; font: 12px monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 6px; padding: 3px 7px; color: var(--muted); background: #fff; }
+  .suggest { position: absolute; top: 66px; left: 0; right: 0; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 30px rgba(0,0,0,.12); z-index: 10; overflow: hidden; display: none; }
+  .suggest.open { display: block; }
+  .suggest button { all: unset; display: flex; width: 100%; box-sizing: border-box; justify-content: space-between; padding: 12px 18px; cursor: pointer; font-size: 15px; }
+  .suggest button:hover, .suggest button.active { background: var(--brand-soft); }
+  .suggest small { color: var(--muted); }
+
+  /* Bill */
+  .bill { flex: 1; min-height: 0; background: var(--card); border: 1px solid var(--line); border-radius: 16px; display: flex; flex-direction: column; overflow: hidden; }
+  .bill-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .bill-head .actions { display: flex; gap: 6px; }
+  .btn { height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: #fff; font: 500 13px Inter; cursor: pointer; }
+  .btn:hover { background: #f3f3ef; }
+  .table-wrap { flex: 1; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th { position: sticky; top: 0; background: #fafaf7; text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 16px; border-bottom: 1px solid #f0f0eb; }
+  tr.new td { animation: flash 1s; }
+  @keyframes flash { from { background: var(--brand-soft); } to { background: transparent; } }
+  .r { text-align: right; }
+  .qty { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .qty button { width: 32px; height: 32px; border: 0; background: #fff; font-size: 18px; cursor: pointer; }
+  .qty input { width: 56px; height: 32px; border: 0; border-left: 1px solid var(--line); border-right: 1px solid var(--line); text-align: center; font: 600 15px Inter; }
+  .x { border: 0; background: none; color: #aaa; font-size: 18px; cursor: pointer; }
+  .x:hover { color: var(--danger); }
+  .empty { padding: 60px 16px; text-align: center; color: var(--muted); }
+
+  /* Pay bar */
+  .pay { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; display: grid; grid-template-columns: 1fr auto auto auto; gap: 16px; align-items: center; }
+  .cust { font-size: 13px; color: var(--muted); }
+  .cust b { color: var(--text); font-size: 14px; }
+  .cust a { color: var(--brand); cursor: pointer; margin-left: 6px; }
+  .small-links { margin-top: 6px; display: flex; gap: 12px; font-size: 13px; }
+  .small-links a { color: var(--brand); cursor: pointer; text-decoration: underline; }
+  .box label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .total { font-size: 34px; font-weight: 700; letter-spacing: -.02em; }
+  .received input { width: 190px; height: 52px; font: 700 24px Inter; padding: 0 12px; border: 2px solid var(--line); border-radius: 12px; outline: none; text-align: right; }
+  .received input:focus { border-color: var(--brand); box-shadow: 0 0 0 4px rgba(30,107,74,.15); }
+  .change { font-size: 24px; font-weight: 700; color: var(--brand-dark); min-width: 140px; }
+  .change.short { color: var(--danger); font-size: 16px; }
+  .complete { grid-column: 1 / -1; height: 58px; border: 0; border-radius: 14px; background: var(--brand); color: #fff; font: 700 19px Inter; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .complete:disabled { background: #a9c3b6; cursor: not-allowed; }
+  .complete kbd { font: 12px monospace; background: rgba(255,255,255,.18); border-radius: 6px; padding: 3px 7px; }
+  .hint { font-size: 12px; color: var(--muted); text-align: center; }
+  .toast { position: fixed; bottom: 20px; right: 20px; background: #1c1f1d; color: #fff; padding: 12px 16px; border-radius: 12px; font-size: 14px; display: none; }
+  @media (max-width: 760px) {
+    .pay { grid-template-columns: 1fr 1fr; }
+    .received input { width: 100%; }
+    .hide-sm { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div>
+      <h1>Bismillah Grocery · Billing</h1>
+      <div class="meta">Cashier 01 · Shift open since 09:00</div>
+    </div>
+    <span class="chip">Counter 1</span>
+  </div>
+
+  <!-- 1. Search -->
+  <div class="search">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" placeholder="Barcode scan karein ya product ka naam likhein…" autocomplete="off" autofocus />
+    <kbd>F2</kbd>
+    <div class="suggest" id="suggest"></div>
+  </div>
+
+  <!-- 2. Bill -->
+  <div class="bill">
+    <div class="bill-head">
+      <span><b>Bill</b> · <span id="count">0</span> items</span>
+      <div class="actions">
+        <button class="btn">Held (1)</button>
+        <button class="btn">Hold</button>
+        <button class="btn" onclick="clearBill()">Clear (F4)</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:40px">#</th><th>Item</th><th class="r">Price</th><th style="width:150px">Qty</th><th class="r">Amount</th><th style="width:40px"></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty">Bill khaali hai. Upar barcode scan karein ya naam likh kar Enter dabayein.</div>
+    </div>
+  </div>
+
+  <!-- 3. Pay -->
+  <div class="pay">
+    <div>
+      <div class="cust">Customer: <b>Walk-in</b><a>Change</a></div>
+      <div class="small-links">
+        <a>Discount</a>
+        <a>Card / Khata / Split</a>
+      </div>
+    </div>
+    <div class="box">
+      <label>Total</label>
+      <div class="total tabular" id="total">Rs. 0</div>
+    </div>
+    <div class="box received">
+      <label>Received (cashier likhe)</label>
+      <input id="recv" inputmode="decimal" placeholder="0" class="tabular" />
+    </div>
+    <div class="box hide-sm">
+      <label>Change wapas</label>
+      <div class="change tabular" id="change">—</div>
+    </div>
+    <button class="complete" id="done" disabled onclick="complete()">✓ Complete & Print Bill <kbd>Enter</kbd></button>
+  </div>
+  <div class="hint">F2 search · Enter add item · Received likh kar Enter = bill complete · F4 clear</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+  const products = [
+    { id: 1, name: 'Sufi Oil 1L', barcode: '111', price: 600, stock: 8 },
+    { id: 2, name: 'Basmati Rice (kg)', barcode: '222', price: 350, stock: 40 },
+    { id: 3, name: 'Olpers Milk 1L', barcode: '333', price: 290, stock: 25 },
+    { id: 4, name: 'Tapal Danedar 450g', barcode: '444', price: 820, stock: 12 },
+    { id: 5, name: 'Sugar (kg)', barcode: '555', price: 160, stock: 60 },
+  ];
+  let bill = [];
+  let sel = 0;
+  const $ = (id) => document.getElementById(id);
+  const rs = (n) => 'Rs. ' + Number(n).toLocaleString('en-PK', { maximumFractionDigits: 2 });
+
+  function matches() {
+    const t = $('q').value.trim().toLowerCase();
+    if (!t) return [];
+    return products.filter((p) => p.barcode === t || p.name.toLowerCase().includes(t)).slice(0, 6);
+  }
+  function renderSuggest() {
+    const m = matches();
+    $('suggest').innerHTML = m.map((p, i) =>
+      `<button class="${i === sel ? 'active' : ''}" onmousedown="add(${p.id})"><span>${p.name}</span><small>${rs(p.price)} · stock ${p.stock}</small></button>`).join('');
+    $('suggest').classList.toggle('open', m.length > 0);
+  }
+  function add(id) {
+    const p = products.find((x) => x.id === id);
+    const line = bill.find((l) => l.id === id);
+    if (line) line.qty++; else bill.push({ ...p, qty: 1 });
+    $('q').value = ''; sel = 0; renderSuggest(); render(id); $('q').focus();
+  }
+  function setQty(id, q) {
+    const line = bill.find((l) => l.id === id);
+    line.qty = Math.max(0, Number(q) || 0);
+    if (!line.qty) bill = bill.filter((l) => l.id !== id);
+    render();
+  }
+  function total() { return bill.reduce((s, l) => s + l.price * l.qty, 0); }
+  function render(flashId) {
+    $('rows').innerHTML = bill.map((l, i) => `
+      <tr class="${l.id === flashId ? 'new' : ''}">
+        <td>${i + 1}</td><td><b>${l.name}</b></td>
+        <td class="r tabular">${rs(l.price)}</td>
+        <td><span class="qty"><button onclick="setQty(${l.id}, ${l.qty - 1})">−</button><input value="${l.qty}" onchange="setQty(${l.id}, this.value)"><button onclick="setQty(${l.id}, ${l.qty + 1})">+</button></span></td>
+        <td class="r tabular"><b>${rs(l.price * l.qty)}</b></td>
+        <td><button class="x" onclick="setQty(${l.id}, 0)">×</button></td>
+      </tr>`).join('');
+    $('empty').style.display = bill.length ? 'none' : 'block';
+    $('count').textContent = bill.length;
+    $('total').textContent = rs(total());
+    updateChange();
+  }
+  function updateChange() {
+    const r = parseFloat($('recv').value);
+    const t = total();
+    const ok = bill.length && !isNaN(r) && r >= t;
+    $('done').disabled = !ok;
+    if (isNaN(r) || !bill.length) { $('change').textContent = '—'; $('change').className = 'change tabular'; }
+    else if (r < t) { $('change').textContent = 'Kam hai: ' + rs(t - r); $('change').className = 'change short tabular'; }
+    else { $('change').textContent = rs(r - t); $('change').className = 'change tabular'; }
+  }
+  function complete() {
+    if ($('done').disabled) return;
+    toast('Bill INV-0001 save ho gaya · print ho raha hai · Change ' + $('change').textContent);
+    bill = []; $('recv').value = ''; render(); $('q').focus();
+  }
+  function clearBill() { bill = []; $('recv').value = ''; render(); $('q').focus(); }
+  function toast(t) { const el = $('toast'); el.textContent = t; el.style.display = 'block'; setTimeout(() => (el.style.display = 'none'), 3000); }
+
+  $('q').addEventListener('input', () => { sel = 0; renderSuggest(); });
+  $('q').addEventListener('keydown', (e) => {
+    const m = matches();
+    if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, m.length - 1); renderSuggest(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); renderSuggest(); e.preventDefault(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (m[sel]) add(m[sel].id);
+      else if (!$('q').value.trim() && bill.length) $('recv').focus();
+    }
+  });
+  $('q').addEventListener('blur', () => setTimeout(() => $('suggest').classList.remove('open'), 150));
+  $('recv').addEventListener('input', updateChange);
+  $('recv').addEventListener('keydown', (e) => { if (e.key === 'Enter') complete(); });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'F2') { e.preventDefault(); $('q').focus(); }
+    if (e.key === 'F4') { e.preventDefault(); clearBill(); }
+    if (e.key === 'F8') { e.preventDefault(); $('recv').focus(); }
+  });
+  render();
+</script>
+</body>
+</html>
